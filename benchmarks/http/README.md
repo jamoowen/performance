@@ -78,16 +78,16 @@ Tooling is pinned in the repository: Biome 2.5.15 formats and lints JavaScript/J
 
 Deploy to a single-node Flux cluster through the separate private cluster repository. Edit and commit its `apps/performance-http` manifests rather than using `kubectl apply` or manual scaling. Publish real images as `ghcr.io/OWNER/performance-http-go` and `ghcr.io/OWNER/performance-http-bun`, then pin their immutable linux/amd64 digests there.
 
-The separate cluster repository’s `apps/performance-http` directory remains unregistered and inactive while image digests are pending. Replace placeholders and explicitly include it in that repository’s Flux root Kustomization only after both images are available.
+The separate cluster repository’s `apps/performance-http` directory pins published image digests and is included in its Flux root Kustomization when the prepared change is committed and pushed. Flux applies it only after that repository reports the pushed revision.
 
-Use one active implementation at a time. The services below are documentation snippets for the separate Flux repository, not resources applied by this repository. They assume the Deployment labels match `app.kubernetes.io/name`, the container exposes a named `http` port on 8080, and both apps use `/healthz` probes. Create the `performance` namespace there if it does not already exist.
+Use one active implementation at a time. The services below are documentation snippets for the separate Flux repository, not resources applied by this repository. They assume the Deployment labels match `app.kubernetes.io/name`, the container exposes a named `http` port on 8080, and both apps use `/healthz` probes. Reuse the existing `my-api` namespace and its `ghcr-pull` Secret for these private images; do not manage either resource in this app.
 
 ```yaml
 apiVersion: v1
 kind: Service
 metadata:
   name: http-go
-  namespace: performance
+  namespace: my-api
 spec:
   type: NodePort
   externalTrafficPolicy: Local
@@ -118,7 +118,7 @@ make load-go PROFILE=steady DURATION=60s RATE=100 WORKLOAD=mixed
 make load-go PROFILE=steady DURATION=5m RATE=100 WORKLOAD=mixed
 ```
 
-`make load` requires an explicit `BASE_URL`; all scenario settings can be overridden, including `K6`, `NODE_IP`, ports, `SEED_COUNT`, VUs, latency threshold, and error threshold. k6 reports latency and schema/check errors, not server CPU or memory. For a quick read-only snapshot use `ssh USER@NODE_IP 'kubectl top pods -n performance'`; record sustained resource observations with the same time window as each run.
+`make load` requires an explicit `BASE_URL`; all scenario settings can be overridden, including `K6`, `NODE_IP`, ports, `SEED_COUNT`, VUs, latency threshold, and error threshold. k6 reports latency and schema/check errors, not server CPU or memory. For a quick read-only snapshot use `ssh USER@NODE_IP 'kubectl top pods -n my-api'`; record sustained resource observations with the same time window as each run.
 
 Save local output without committing it:
 
@@ -130,6 +130,6 @@ make load-bun PROFILE=steady DURATION=5m RATE=100 >results/http/bun-steady.log 2
 
 ## GitHub Actions publication
 
-The `HTTP images` workflow checks pull requests and publishes the Go and Bun linux/amd64 images on `main` or manual dispatch. It uses GitHub Actions’ ephemeral `GITHUB_TOKEN`; no personal access token is configured or required by this workflow. Each publish job writes an immutable `image@digest` reference to the workflow summary. Copy those digest references into the separate private Flux repository before activating either workload.
+The `HTTP images` workflow checks pull requests and publishes the Go and Bun linux/amd64 images on `main` or manual dispatch. It uses GitHub Actions’ ephemeral `GITHUB_TOKEN`; no personal access token is configured or required by this workflow. Each publish job writes an immutable linux/amd64 manifest `image@digest` reference to the workflow summary. Copy those digest references into the separate private Flux repository before activating either workload.
 
 Repository visibility and package visibility are separate. A public source repository does not make GHCR packages public automatically. If images are made public for anonymous pulls, remove the cluster workload’s `imagePullSecrets` reference; private pulls still require the namespace-scoped pull Secret documented in that private cluster repository.

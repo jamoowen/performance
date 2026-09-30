@@ -26,6 +26,10 @@ jobs:
         with:
           python-version: "3.13"
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7
+        with:
+          cache-dependency-glob: |
+            Makefile
+            ruff.toml
       - run: make tools
       - run: make check
 
@@ -65,4 +69,11 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=http-${{ matrix.runtime }}
           cache-to: type=gha,mode=max,scope=http-${{ matrix.runtime }}
-      - run: echo "ghcr.io/${{ github.repository_owner }}/performance-http-${{ matrix.runtime }}@${{ steps.build.outputs.digest }}" >> "$GITHUB_STEP_SUMMARY"
+      - name: Record amd64 image digest
+        shell: bash
+        env:
+          IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/performance-http-${{ matrix.runtime }}
+          IMAGE_INDEX_DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          AMD64_DIGEST="$(docker buildx imagetools inspect "${IMAGE_NAME}@${IMAGE_INDEX_DIGEST}" --raw | jq -er '[.manifests[] | select(.platform.os == "linux" and .platform.architecture == "amd64")] | if length == 1 then .[0].digest else error("Expected exactly one linux/amd64 image manifest") end')"
+          printf '%s@%s\n' "$IMAGE_NAME" "$AMD64_DIGEST" >> "$GITHUB_STEP_SUMMARY"
