@@ -1,0 +1,13 @@
+**/*.sqlite
+**/*.sqlite-wal
+**/*.sqlite-shm
+**/__pycache__/
+**/*.pyc
+**/node_modules/
+**/.cache/
+**/data/
+**/http-go-test
+.tools/
+.ruff_cache/
+results/
+.local.mk
