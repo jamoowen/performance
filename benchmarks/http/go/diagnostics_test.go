@@ -263,3 +263,19 @@ func TestDiagnosticsDefaultModeIsDisabled(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestMemoryDiagnosticsOmitsDatabaseStats(t *testing.T) {
+	handler := newDiagnosticsHandler(newMemoryStore(20))
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/runtime", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d", response.Code)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := payload["database"]; exists {
+		t.Fatal("memory diagnostics must omit database stats")
+	}
+}

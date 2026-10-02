@@ -83,9 +83,11 @@ class CommandAndMetadataTest(unittest.TestCase):
             "metadata": {"name": "bun", "labels": {"app.kubernetes.io/name": "http-bun"}},
             "status": {"phase": "Pending"},
         }
-        disabled = {"metadata": {"name": "http-bun"}, "spec": {"replicas": 0}}
+        deployments = {"items": [{"metadata": {"name": "http-bun"}, "spec": {"replicas": 0}}]}
         with patch.object(
-            cluster, "_json", side_effect=[deployment, disabled, {"items": [selected, other]}]
+            cluster,
+            "_json",
+            side_effect=[deployment, deployments, {"items": [selected, other]}],
         ):
             with self.assertRaisesRegex(RuntimeError, "exactly one"):
                 cluster.metadata("my-api", "http-go")
@@ -112,7 +114,7 @@ class CommandAndMetadataTest(unittest.TestCase):
             "_json",
             side_effect=[
                 deployment,
-                {"metadata": {"name": "http-bun"}, "spec": {"replicas": 0}},
+                {"items": [{"metadata": {"name": "http-bun"}, "spec": {"replicas": 0}}]},
                 {"items": [pod]},
                 {"metadata": {"name": "node", "uid": "n"}},
             ],
@@ -125,7 +127,7 @@ class CommandAndMetadataTest(unittest.TestCase):
             "metadata": {"name": "http-go"},
             "spec": {"replicas": 1, "template": {"spec": {"containers": [{"name": "http-go"}]}}},
         }
-        enabled = {"metadata": {"name": "http-bun"}, "spec": {"replicas": 1}}
+        enabled = {"items": [{"metadata": {"name": "http-bun"}, "spec": {"replicas": 1}}]}
         with patch.object(cluster, "_json", side_effect=[deployment, enabled]):
             with self.assertRaisesRegex(RuntimeError, "zero replicas"):
                 cluster.metadata("my-api", "http-go")

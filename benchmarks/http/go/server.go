@@ -9,18 +9,21 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
+
+	"github.com/go-chi/chi/v5"
 )
 
 const maxBodyBytes = 1 << 20
 
 type apiServer struct {
-	store     *Store
+	store     backend
 	seedCount int
 }
 
-func newServer(store *Store, seedCount int) http.Handler {
+func newServer(store backend, seedCount int) http.Handler {
 	server := apiServer{store: store, seedCount: seedCount}
 	mux := http.NewServeMux()
 	registerGetRoute(mux, "/healthz", func(writer http.ResponseWriter, request *http.Request) {
@@ -39,6 +42,64 @@ func newServer(store *Store, seedCount int) http.Handler {
 		writeError(writer, http.StatusNotFound, "not found")
 	})
 	return mux
+}
+
+func newServerWithRouter(store backend, seedCount int, router string) (http.Handler, error) {
+	if router == "stdlib" {
+		return newServer(store, seedCount), nil
+	}
+	if router != "chi" {
+		return nil, fmt.Errorf("ROUTER must be stdlib or chi")
+	}
+	server := apiServer{store: store, seedCount: seedCount}
+	routes := chi.NewRouter()
+	productHandler := func(writer http.ResponseWriter, request *http.Request) {
+		id, err := url.PathUnescape(chi.URLParam(request, "id"))
+		if err != nil {
+			writeError(writer, http.StatusBadRequest, "id must be a positive integer")
+			return
+		}
+		request.SetPathValue("id", id)
+		server.productDetail(writer, request)
+	}
+	routes.Get("/healthz", func(writer http.ResponseWriter, request *http.Request) {
+		writeJSON(writer, http.StatusOK, map[string]string{"status": "ok"})
+	})
+	routes.Head("/healthz", func(writer http.ResponseWriter, request *http.Request) {
+		writeJSON(writer, http.StatusOK, map[string]string{"status": "ok"})
+	})
+	routes.Get("/products", server.listProducts)
+	routes.Head("/products", server.listProducts)
+	routes.Get("/products/{id}", productHandler)
+	routes.Head("/products/{id}", productHandler)
+	routes.Get("/products/", func(writer http.ResponseWriter, request *http.Request) {
+		writeError(writer, http.StatusBadRequest, "id must be a positive integer")
+	})
+	routes.Head("/products/", func(writer http.ResponseWriter, request *http.Request) {
+		writeError(writer, http.StatusBadRequest, "id must be a positive integer")
+	})
+	routes.Get("/reports/catalog", server.catalogReport)
+	routes.Head("/reports/catalog", server.catalogReport)
+	routes.Get("/reports/events", server.eventsReport)
+	routes.Head("/reports/events", server.eventsReport)
+	routes.Post("/cart/quote", server.quoteCart)
+	routes.Post("/events/batch", server.batchEvents)
+	routes.NotFound(func(writer http.ResponseWriter, request *http.Request) {
+		writeError(writer, http.StatusNotFound, "not found")
+	})
+	routes.MethodNotAllowed(func(writer http.ResponseWriter, request *http.Request) {
+		path := request.URL.Path
+		if path == "/healthz" || path == "/products" || path == "/products/" || path == "/reports/catalog" || path == "/reports/events" || strings.HasPrefix(path, "/products/") && !strings.Contains(strings.TrimPrefix(path, "/products/"), "/") {
+			methodNotAllowed(writer, "GET, HEAD")
+			return
+		}
+		if path == "/cart/quote" || path == "/events/batch" {
+			methodNotAllowed(writer, http.MethodPost)
+			return
+		}
+		writeError(writer, http.StatusNotFound, "not found")
+	})
+	return routes, nil
 }
 
 func registerGetRoute(mux *http.ServeMux, pattern string, handler http.HandlerFunc) {
@@ -88,31 +149,8 @@ func (server apiServer) listProducts(writer http.ResponseWriter, request *http.R
 		writeError(writer, http.StatusBadRequest, "limit is invalid")
 		return
 	}
-	context := request.Context()
-	var total int
-	if err := server.store.listCount.QueryRowContext(context, category, category, search, search).Scan(&total); err != nil {
-		databaseError(writer, err)
-		return
-	}
-	if offset > total {
-		offset = total
-	}
-	rows, err := server.store.listRows.QueryContext(context, category, category, search, search, limit, offset)
+	result, err := server.store.list(request.Context(), category, search, offset, limit)
 	if err != nil {
-		databaseError(writer, err)
-		return
-	}
-	defer func() { _ = rows.Close() }()
-	products := make([]Product, 0)
-	for rows.Next() {
-		product, err := scanProduct(rows)
-		if err != nil {
-			databaseError(writer, err)
-			return
-		}
-		products = append(products, product)
-	}
-	if err := rows.Err(); err != nil {
 		databaseError(writer, err)
 		return
 	}
@@ -121,51 +159,16 @@ func (server apiServer) listProducts(writer http.ResponseWriter, request *http.R
 		Total    int       `json:"total"`
 		Offset   int       `json:"offset"`
 		Limit    int       `json:"limit"`
-	}{products, total, offset, limit})
+	}{result.Products, result.Total, result.Offset, result.Limit})
 }
 
 func (server apiServer) catalogReport(writer http.ResponseWriter, request *http.Request) {
-	type categoryReport struct {
-		Category            string `json:"category"`
-		Count               int    `json:"count"`
-		Stock               int    `json:"stock"`
-		InventoryValueCents int    `json:"inventoryValueCents"`
-	}
-	reports := make([]categoryReport, len(categories))
-	for i, category := range categories {
-		reports[i].Category = category
-	}
-	totalStock, totalValue := 0, 0
-	rows, err := server.store.catalogReport.QueryContext(request.Context())
+	result, err := server.store.catalog(request.Context())
 	if err != nil {
 		databaseError(writer, err)
 		return
 	}
-	defer func() { _ = rows.Close() }()
-	for rows.Next() {
-		var category string
-		var count, stock, value int
-		if err := rows.Scan(&category, &count, &stock, &value); err != nil {
-			databaseError(writer, err)
-			return
-		}
-		for index := range reports {
-			if reports[index].Category == category {
-				reports[index].Count, reports[index].Stock, reports[index].InventoryValueCents = count, stock, value
-				totalStock += stock
-				totalValue += value
-			}
-		}
-	}
-	if err := rows.Err(); err != nil {
-		databaseError(writer, err)
-		return
-	}
-	writeJSON(writer, http.StatusOK, struct {
-		Categories               []categoryReport `json:"categories"`
-		TotalStock               int              `json:"totalStock"`
-		TotalInventoryValueCents int              `json:"totalInventoryValueCents"`
-	}{reports, totalStock, totalValue})
+	writeJSON(writer, http.StatusOK, result)
 }
 
 type quoteLine struct {
@@ -276,21 +279,7 @@ func (server apiServer) batchEvents(writer http.ResponseWriter, request *http.Re
 		values[item.Type] += *item.Value
 		fmt.Fprintf(&canonical, "%d:%s:%d\n", *item.UserID, item.Type, *item.Value)
 	}
-	tx, err := server.store.db.BeginTx(request.Context(), nil)
-	if err != nil {
-		databaseError(writer, err)
-		return
-	}
-	defer func() { _ = tx.Rollback() }()
-	statement := tx.StmtContext(request.Context(), server.store.eventUpsert)
-	defer func() { _ = statement.Close() }()
-	for _, item := range input.Events {
-		if _, err := statement.ExecContext(request.Context(), *item.UserID, item.Type, *item.Value); err != nil {
-			databaseError(writer, err)
-			return
-		}
-	}
-	if err := tx.Commit(); err != nil {
+	if err := server.store.recordEvents(request.Context(), input.Events); err != nil {
 		databaseError(writer, err)
 		return
 	}
@@ -303,31 +292,12 @@ func (server apiServer) batchEvents(writer http.ResponseWriter, request *http.Re
 }
 
 func (server apiServer) eventsReport(writer http.ResponseWriter, request *http.Request) {
-	counts := map[string]int64{"view": 0, "click": 0, "purchase": 0}
-	values := map[string]int64{"view": 0, "click": 0, "purchase": 0}
-	rows, err := server.store.eventsReport.QueryContext(request.Context())
+	result, err := server.store.events(request.Context())
 	if err != nil {
 		databaseError(writer, err)
 		return
 	}
-	defer func() { _ = rows.Close() }()
-	for rows.Next() {
-		var eventType string
-		var count, value int64
-		if err := rows.Scan(&eventType, &count, &value); err != nil {
-			databaseError(writer, err)
-			return
-		}
-		counts[eventType], values[eventType] = count, value
-	}
-	if err := rows.Err(); err != nil {
-		databaseError(writer, err)
-		return
-	}
-	writeJSON(writer, http.StatusOK, struct {
-		Counts map[string]int64 `json:"counts"`
-		Values map[string]int64 `json:"values"`
-	}{counts, values})
+	writeJSON(writer, http.StatusOK, result)
 }
 
 func decodeJSON(writer http.ResponseWriter, request *http.Request, target any) int {

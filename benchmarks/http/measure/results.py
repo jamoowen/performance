@@ -247,6 +247,9 @@ def compatible_key(record):
         str(configuration.get("GOMAXPROCS") or ""),
         str(configuration.get("GOMEMLIMIT") or ""),
         str(configuration.get("GODEBUG") or ""),
+        str(configuration.get("BACKEND") or ""),
+        str(configuration.get("ROUTER") or ""),
+        str(configuration.get("WORKERS") or ""),
         (target.scheme, target.hostname, target.path),
     )
 

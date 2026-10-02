@@ -219,3 +219,97 @@ func (store *Store) product(context context.Context, id int) (Product, bool, err
 	}
 	return product, err == nil, err
 }
+
+func (store *Store) list(context context.Context, category, search string, offset, limit int) (listResult, error) {
+	var total int
+	if err := store.listCount.QueryRowContext(context, category, category, search, search).Scan(&total); err != nil {
+		return listResult{}, err
+	}
+	if offset > total {
+		offset = total
+	}
+	rows, err := store.listRows.QueryContext(context, category, category, search, search, limit, offset)
+	if err != nil {
+		return listResult{}, err
+	}
+	defer func() { _ = rows.Close() }()
+	products := make([]Product, 0)
+	for rows.Next() {
+		product, err := scanProduct(rows)
+		if err != nil {
+			return listResult{}, err
+		}
+		products = append(products, product)
+	}
+	if err := rows.Err(); err != nil {
+		return listResult{}, err
+	}
+	return listResult{Products: products, Total: total, Offset: offset, Limit: limit}, nil
+}
+
+func (store *Store) catalog(context context.Context) (catalogResult, error) {
+	reports := make([]categoryReport, len(categories))
+	for i, category := range categories {
+		reports[i].Category = category
+	}
+	rows, err := store.catalogReport.QueryContext(context)
+	if err != nil {
+		return catalogResult{}, err
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var category string
+		var count, stock, value int
+		if err := rows.Scan(&category, &count, &stock, &value); err != nil {
+			return catalogResult{}, err
+		}
+		for index := range reports {
+			if reports[index].Category == category {
+				reports[index].Count, reports[index].Stock, reports[index].InventoryValueCents = count, stock, value
+			}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return catalogResult{}, err
+	}
+	result := catalogResult{Categories: reports}
+	for _, report := range reports {
+		result.TotalStock += report.Stock
+		result.TotalInventoryValueCents += report.InventoryValueCents
+	}
+	return result, nil
+}
+
+func (store *Store) recordEvents(context context.Context, events []event) error {
+	tx, err := store.db.BeginTx(context, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	statement := tx.StmtContext(context, store.eventUpsert)
+	defer func() { _ = statement.Close() }()
+	for _, item := range events {
+		if _, err := statement.ExecContext(context, *item.UserID, item.Type, *item.Value); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func (store *Store) events(context context.Context) (eventResult, error) {
+	result := eventResult{Counts: map[string]int64{"view": 0, "click": 0, "purchase": 0}, Values: map[string]int64{"view": 0, "click": 0, "purchase": 0}}
+	rows, err := store.eventsReport.QueryContext(context)
+	if err != nil {
+		return eventResult{}, err
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var eventType string
+		var count, value int64
+		if err := rows.Scan(&eventType, &count, &value); err != nil {
+			return eventResult{}, err
+		}
+		result.Counts[eventType], result.Values[eventType] = count, value
+	}
+	return result, rows.Err()
+}

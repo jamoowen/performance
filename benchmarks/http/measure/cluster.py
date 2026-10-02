@@ -9,7 +9,7 @@ import sys
 import time
 from pathlib import Path
 
-DEPLOYMENTS = {"http-go", "http-bun"}
+DEPLOYMENTS = {"http-go", "http-bun", "http-rust"}
 DNS_NAME = re.compile(r"[a-z0-9]([-a-z0-9]*[a-z0-9])?")
 
 
@@ -195,7 +195,15 @@ def _workload(deployment):
             # Capture only benchmark/runtime knobs with literal values; never inspect Secrets.
             **{
                 name: environment.get(name, "")
-                for name in ("DIAGNOSTICS", "GOMAXPROCS", "GOMEMLIMIT", "GODEBUG")
+                for name in (
+                    "BACKEND",
+                    "ROUTER",
+                    "WORKERS",
+                    "DIAGNOSTICS",
+                    "GOMAXPROCS",
+                    "GOMEMLIMIT",
+                    "GODEBUG",
+                )
             },
         },
     }
@@ -204,10 +212,16 @@ def _workload(deployment):
 def metadata(namespace, deployment):
     selected = _json(["get", "deployment", deployment, "-n", namespace, "-o", "json"])
     workload = _workload(selected)
-    other_deployment = next(name for name in DEPLOYMENTS if name != deployment)
-    other = _json(["get", "deployment", other_deployment, "-n", namespace, "-o", "json"])
-    if other.get("spec", {}).get("replicas", 1) != 0:
-        raise RuntimeError("other benchmark deployment must have zero replicas")
+    deployments = _json(["get", "deployments", "-n", namespace, "-o", "json"]).get("items", [])
+    by_name = {item.get("metadata", {}).get("name"): item for item in deployments}
+    for other_deployment in sorted(DEPLOYMENTS - {deployment}):
+        other = by_name.get(other_deployment)
+        # Rust is absent until its manifest is added. A missing disabled deployment
+        # must not prevent recording an existing Go or Bun baseline.
+        if other is None:
+            continue
+        if other.get("spec", {}).get("replicas", 1) != 0:
+            raise RuntimeError("other benchmark deployment must have zero replicas")
     pods = _json(["get", "pods", "-n", namespace, "-o", "json"]).get("items", [])
     active = [
         pod

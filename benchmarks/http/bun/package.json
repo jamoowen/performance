@@ -3,6 +3,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "bun run server.js"
+    "start": "bun run launcher.js"
+  },
+  "dependencies": {
+    "elysia": "1.4.19"
   }
 }

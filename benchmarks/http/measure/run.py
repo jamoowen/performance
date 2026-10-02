@@ -31,7 +31,7 @@ def _duration_seconds(value):
 
 def arguments(argv=None):
     parser = argparse.ArgumentParser(description="Record one HTTP benchmark")
-    parser.add_argument("implementation", choices=("go", "bun"))
+    parser.add_argument("implementation", choices=("go", "bun", "rust"))
     parser.add_argument("--base-url", required=True)
     parser.add_argument("--ssh-host", required=True)
     parser.add_argument("--namespace", default="my-api")
@@ -48,6 +48,10 @@ def arguments(argv=None):
     parser.add_argument("--warmup-duration", default="60s")
     parser.add_argument("--sample-interval", type=float, default=5)
     parser.add_argument("--results-dir", default="results/http")
+    parser.add_argument("--experiment", default="baseline")
+    parser.add_argument("--variant", default="baseline")
+    parser.add_argument("--repetition", type=int, default=1)
+    parser.add_argument("--campaign-fingerprint")
     parser.add_argument("--diagnostics", action="store_true")
     parser.add_argument("--diagnostics-seconds", type=int, default=30)
     args = parser.parse_args(argv)
@@ -60,6 +64,7 @@ def arguments(argv=None):
         or args.p95_ms < 0
         or not 0 <= args.max_error_rate <= 1
         or args.sample_interval <= 0
+        or args.repetition < 1
         or not 1 <= args.diagnostics_seconds <= 120
         or (
             args.diagnostics
@@ -72,6 +77,12 @@ def arguments(argv=None):
         parser.error("invalid benchmark setting")
     if args.diagnostics and args.profile != "steady":
         parser.error("--diagnostics currently requires --profile steady")
+    if not re.fullmatch(r"[a-z0-9][a-z0-9-]*", args.experiment):
+        parser.error("--experiment must be a safe lowercase slug")
+    if not args.variant.strip():
+        parser.error("--variant must not be empty")
+    if args.implementation == "rust" and args.diagnostics:
+        parser.error("--diagnostics is not supported for rust")
     return args
 
 
@@ -366,13 +377,17 @@ def _print_summary(directory, status, result, resource):
 def main(argv=None):
     args = arguments(argv)
     started = datetime.now(UTC)
-    run_id = f"{started:%Y%m%dT%H%M%S}.{started.microsecond:06d}Z-{args.implementation}-{args.profile}-{args.rate}rps"
+    run_id = f"{started:%Y%m%dT%H%M%S}.{started.microsecond:06d}Z-{args.implementation}-{args.experiment}-{args.profile}-{args.rate}rps"
     directory = Path(args.results_dir) / run_id
     directory.mkdir(parents=True, exist_ok=False)
     deployment = f"http-{args.implementation}"
     metadata = {
         "schema_version": SCHEMA_VERSION,
         "implementation": args.implementation,
+        "experiment": args.experiment,
+        "variant": args.variant,
+        "repetition": args.repetition,
+        "campaign_fingerprint": args.campaign_fingerprint,
         "base_url": args.base_url,
         "started_at": started.isoformat(),
         "settings": _settings(args),

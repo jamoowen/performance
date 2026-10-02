@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -31,7 +32,19 @@ func main() {
 	if dbPath == "" {
 		dbPath = filepath.Join("data", "benchmark.sqlite")
 	}
-	store, err := openStore(dbPath, seedCount, connections)
+	backendName := strings.ToLower(os.Getenv("BACKEND"))
+	if backendName == "" {
+		backendName = "sqlite"
+	}
+	var store backend
+	switch backendName {
+	case "sqlite":
+		store, err = openStore(dbPath, seedCount, connections)
+	case "memory":
+		store = newMemoryStore(seedCount)
+	default:
+		panic("BACKEND must be sqlite or memory")
+	}
 	if err != nil {
 		panic(err)
 	}
@@ -41,25 +54,34 @@ func main() {
 		panic(err)
 	}
 	defer func() { _ = stopDiagnostics() }()
-	version, err := store.sqliteVersion()
+	if sqlite, ok := store.(*Store); ok {
+		version, err := sqlite.sqliteVersion()
+		if err != nil {
+			panic(err)
+		}
+		journalMode, err := sqlite.pragma("journal_mode")
+		if err != nil {
+			panic(err)
+		}
+		synchronous, err := sqlite.pragma("synchronous")
+		if err != nil {
+			panic(err)
+		}
+		fmt.Fprintf(os.Stderr, "go_version=%s backend=sqlite sqlite_version=%s seed_count=%d db_path=%s max_open_conns=%d journal_mode=%s synchronous=%s foreign_keys=on busy_timeout=5000 cache_size=-2000 wal_autocheckpoint=1000 temp_store=MEMORY\n", runtime.Version(), version, seedCount, dbPath, connections, journalMode, synchronous)
+	} else {
+		fmt.Fprintf(os.Stderr, "go_version=%s backend=memory seed_count=%d\n", runtime.Version(), seedCount)
+	}
+	router := strings.ToLower(os.Getenv("ROUTER"))
+	if router == "" {
+		router = "stdlib"
+	}
+	handler, err := newServerWithRouter(store, seedCount, router)
 	if err != nil {
 		panic(err)
 	}
-	journalMode, err := store.pragma("journal_mode")
-	if err != nil {
-		panic(err)
-	}
-	synchronous, err := store.pragma("synchronous")
-	if err != nil {
-		panic(err)
-	}
-	fmt.Fprintf(os.Stderr,
-		"go_version=%s sqlite_version=%s seed_count=%d db_path=%s max_open_conns=%d journal_mode=%s synchronous=%s foreign_keys=on busy_timeout=5000 cache_size=-2000 wal_autocheckpoint=1000 temp_store=MEMORY\n",
-		runtime.Version(), version, seedCount, dbPath, connections, journalMode, synchronous,
-	)
 	server := &http.Server{
 		Addr:              fmt.Sprintf("0.0.0.0:%d", port),
-		Handler:           newServer(store, seedCount),
+		Handler:           handler,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      15 * time.Second,

@@ -15,4 +15,5 @@ results/
 docs/
 .local.mk
 .git/
+**/target/
 ephemeral/

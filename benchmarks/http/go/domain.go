@@ -1,6 +1,9 @@
 package main
 
-import "fmt"
+import (
+	"context"
+	"fmt"
+)
 
 var categories = []string{"books", "electronics", "home", "sports", "toys"}
 
@@ -11,6 +14,40 @@ type Product struct {
 	PriceCents int      `json:"priceCents"`
 	Stock      int      `json:"stock"`
 	Tags       []string `json:"tags"`
+}
+
+type listResult struct {
+	Products []Product
+	Total    int
+	Offset   int
+	Limit    int
+}
+
+type categoryReport struct {
+	Category            string `json:"category"`
+	Count               int    `json:"count"`
+	Stock               int    `json:"stock"`
+	InventoryValueCents int    `json:"inventoryValueCents"`
+}
+
+type catalogResult struct {
+	Categories               []categoryReport `json:"categories"`
+	TotalStock               int              `json:"totalStock"`
+	TotalInventoryValueCents int              `json:"totalInventoryValueCents"`
+}
+
+type eventResult struct {
+	Counts map[string]int64 `json:"counts"`
+	Values map[string]int64 `json:"values"`
+}
+
+type backend interface {
+	product(context.Context, int) (Product, bool, error)
+	list(context.Context, string, string, int, int) (listResult, error)
+	catalog(context.Context) (catalogResult, error)
+	recordEvents(context.Context, []event) error
+	events(context.Context) (eventResult, error)
+	close() error
 }
 
 func productFor(id int) Product {

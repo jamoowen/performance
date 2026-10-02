@@ -45,7 +45,7 @@ type runtimeDiagnostics struct {
 	ProcessID     int         `json:"process_id"`
 	ProcessCPU    *processCPU `json:"process_cpu"`
 	Go            goRuntime   `json:"go"`
-	Database      database    `json:"database"`
+	Database      *database   `json:"database,omitempty"`
 }
 
 type goRuntime struct {
@@ -71,7 +71,7 @@ type database struct {
 	WaitDurationNS     int64 `json:"wait_duration_ns"`
 }
 
-func startDiagnostics(store *Store) (func() error, error) {
+func startDiagnostics(store backend) (func() error, error) {
 	mode := os.Getenv("DIAGNOSTICS")
 	if mode == "" || mode == "0" {
 		return func() error { return nil }, nil
@@ -87,7 +87,7 @@ func startDiagnostics(store *Store) (func() error, error) {
 	return cleanup, nil
 }
 
-func startDiagnosticsListenerWithCPU(store *Store, listener net.Listener) (func() error, *cpuProfiler) {
+func startDiagnosticsListenerWithCPU(store backend, listener net.Listener) (func() error, *cpuProfiler) {
 	runtime.SetBlockProfileRate(1_000_000)
 	runtime.SetMutexProfileFraction(10)
 	handler, cpu := newDiagnosticsHandlerWithCPU(store)
@@ -111,12 +111,12 @@ func startDiagnosticsListenerWithCPU(store *Store, listener net.Listener) (func(
 	}, cpu
 }
 
-func newDiagnosticsHandler(store *Store) http.Handler {
+func newDiagnosticsHandler(store backend) http.Handler {
 	handler, _ := newDiagnosticsHandlerWithCPU(store)
 	return handler
 }
 
-func newDiagnosticsHandlerWithCPU(store *Store) (http.Handler, *cpuProfiler) {
+func newDiagnosticsHandlerWithCPU(store backend) (http.Handler, *cpuProfiler) {
 	cpu := &cpuProfiler{}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /runtime", func(writer http.ResponseWriter, request *http.Request) {
@@ -218,11 +218,10 @@ func diagnosticsSeconds(value string) (int, bool) {
 	return seconds, err == nil && seconds >= 1 && seconds <= 120
 }
 
-func writeDiagnosticsRuntime(writer http.ResponseWriter, store *Store) {
+func writeDiagnosticsRuntime(writer http.ResponseWriter, store backend) {
 	var memory runtime.MemStats
 	runtime.ReadMemStats(&memory)
-	dbStats := store.db.Stats()
-	writeJSON(writer, http.StatusOK, runtimeDiagnostics{
+	result := runtimeDiagnostics{
 		SchemaVersion: 1,
 		Runtime:       "go",
 		TimeUnix:      float64(time.Now().UnixNano()) / float64(time.Second),
@@ -242,13 +241,10 @@ func writeDiagnosticsRuntime(writer http.ResponseWriter, store *Store) {
 			GCCycles:        memory.NumGC,
 			GCPauseTotalNS:  memory.PauseTotalNs,
 		},
-		Database: database{
-			MaxOpenConnections: dbStats.MaxOpenConnections,
-			OpenConnections:    dbStats.OpenConnections,
-			InUse:              dbStats.InUse,
-			Idle:               dbStats.Idle,
-			WaitCount:          dbStats.WaitCount,
-			WaitDurationNS:     dbStats.WaitDuration.Nanoseconds(),
-		},
-	})
+	}
+	if sqlite, ok := store.(*Store); ok {
+		dbStats := sqlite.db.Stats()
+		result.Database = &database{MaxOpenConnections: dbStats.MaxOpenConnections, OpenConnections: dbStats.OpenConnections, InUse: dbStats.InUse, Idle: dbStats.Idle, WaitCount: dbStats.WaitCount, WaitDurationNS: dbStats.WaitDuration.Nanoseconds()}
+	}
+	writeJSON(writer, http.StatusOK, result)
 }

@@ -17,6 +17,19 @@ from measure.results import (
 
 
 class MeasurementTests(unittest.TestCase):
+    def test_rust_diagnostics_is_rejected_before_recording(self):
+        with self.assertRaises(SystemExit):
+            run.arguments(
+                [
+                    "rust",
+                    "--base-url",
+                    "http://localhost",
+                    "--ssh-host",
+                    "host",
+                    "--diagnostics",
+                ]
+            )
+
     def runner_fixture(self, temporary):
         args = run.arguments(
             [

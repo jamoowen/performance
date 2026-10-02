@@ -1,16 +1,21 @@
-import { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
-import { mkdir } from "node:fs/promises";
-import { dirname } from "node:path";
 import { diagnosticsEnabled, startDiagnostics } from "./diagnostics.js";
+import { createStorage } from "./storage.js";
 
 const categories = ["books", "electronics", "home", "sports", "toys"];
 const maxBodyBytes = 1024 * 1024;
 const seedCount = envNumber("SEED_COUNT", 5000, 100000);
 const port = envNumber("PORT", 8080, 65535);
 const dbPath = process.env.DB_PATH || "./data/benchmark.sqlite";
-await mkdir(dirname(dbPath), { recursive: true });
-const db = new Database(dbPath, { create: true, strict: true });
+const backend = process.env.BACKEND || "sqlite";
+const router = process.env.ROUTER || "stdlib";
+if (!["sqlite", "memory"].includes(backend)) {
+  throw new Error("BACKEND must be sqlite or memory");
+}
+if (!["stdlib", "elysia"].includes(router)) {
+  throw new Error("ROUTER must be stdlib or elysia");
+}
+const { Elysia } = router === "elysia" ? await import("elysia") : {};
 
 function envNumber(name, fallback, maximum) {
   const value = process.env[name];
@@ -21,23 +26,6 @@ function envNumber(name, fallback, maximum) {
     throw new Error(`${name} must be an integer between 1 and ${maximum}`);
   }
   return Number(value);
-}
-
-function configureDatabase() {
-  for (const setting of [
-    "journal_mode=WAL",
-    "synchronous=NORMAL",
-    "foreign_keys=ON",
-    "busy_timeout=5000",
-    "cache_size=-2000",
-    "wal_autocheckpoint=1000",
-    "temp_store=MEMORY",
-  ]) {
-    db.exec(`PRAGMA ${setting}`);
-  }
-  if (db.query("PRAGMA journal_mode").get().journal_mode !== "wal") {
-    throw new Error("WAL mode was not enabled");
-  }
 }
 
 function productFor(id) {
@@ -51,100 +39,13 @@ function productFor(id) {
     tags: [category, id % 3 === 0 ? "featured" : "standard", id % 2 === 0 ? "even" : "odd"],
   };
 }
-
-function verifyDatabaseMetadata() {
-  const version = db.query("SELECT value FROM metadata WHERE key='schema_version'").get();
-  const seed = db.query("SELECT value FROM metadata WHERE key='seed_count'").get();
-  if (!version || !seed || version.value !== "1" || seed.value !== String(seedCount)) {
-    throw new Error(
-      `database metadata does not match schema version 1 and SEED_COUNT ${seedCount}`,
-    );
-  }
-}
-
-function seedDatabase() {
-  db.exec(`
-    CREATE TABLE metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL);
-    CREATE TABLE products(
-      id INTEGER PRIMARY KEY, name TEXT NOT NULL, category TEXT NOT NULL,
-      price_cents INTEGER NOT NULL, stock INTEGER NOT NULL, tags TEXT NOT NULL
-    );
-    CREATE INDEX products_category_id ON products(category, id);
-    CREATE TABLE users(id INTEGER PRIMARY KEY, name TEXT NOT NULL);
-    CREATE TABLE event_totals(
-      user_id INTEGER NOT NULL REFERENCES users(id), type TEXT NOT NULL,
-      count INTEGER NOT NULL CHECK(count >= 0), value_total INTEGER NOT NULL CHECK(value_total >= 0),
-      PRIMARY KEY(user_id, type)
-    );
-  `);
-  const insertProduct = db.query("INSERT INTO products VALUES(?,?,?,?,?,?)");
-  const insertUser = db.query("INSERT INTO users VALUES(?,?)");
-  for (let id = 1; id <= seedCount; id += 1) {
-    const product = productFor(id);
-    insertProduct.run(
-      product.id,
-      product.name,
-      product.category,
-      product.priceCents,
-      product.stock,
-      JSON.stringify(product.tags),
-    );
-    insertUser.run(id, `User ${String(id).padStart(5, "0")}`);
-  }
-  db.query("INSERT INTO metadata VALUES('schema_version','1'),('seed_count',?)").run(
-    String(seedCount),
-  );
-}
-
-function initializeDatabase() {
-  if (db.query("SELECT name FROM sqlite_master WHERE type='table' AND name='metadata'").get()) {
-    return verifyDatabaseMetadata();
-  }
-  db.transaction(seedDatabase).immediate();
-}
-
-configureDatabase();
-initializeDatabase();
+const store = await createStorage({ backend, dbPath, seedCount, categories, productFor });
 const diagnostics = diagnosticsEnabled() ? startDiagnostics() : null;
 console.error(
-  `runtime=bun-${Bun.version} sqlite_version=${db.query("SELECT sqlite_version() AS version").get().version} seed_count=${seedCount} db_path=${dbPath} max_open_conns=1`,
+  backend === "sqlite"
+    ? `runtime=bun-${Bun.version} backend=sqlite sqlite_version=${store.sqliteVersion} seed_count=${seedCount} db_path=${dbPath} max_open_conns=1`
+    : `runtime=bun-${Bun.version} backend=memory seed_count=${seedCount}`,
 );
-
-const statements = {
-  productById: db.query(`SELECT id, name, category, price_cents, stock, tags
-    FROM products WHERE id = ?`),
-  productCount: db.query(`SELECT COUNT(*) AS total FROM products
-    WHERE (? = '' OR category = ?)
-      AND (? = '' OR instr(lower(name), lower(?)) > 0)`),
-  productList: db.query(`SELECT id, name, category, price_cents, stock, tags
-    FROM products
-    WHERE (? = '' OR category = ?)
-      AND (? = '' OR instr(lower(name), lower(?)) > 0)
-    ORDER BY id LIMIT ? OFFSET ?`),
-  catalogReport: db.query(`SELECT category, COUNT(*) AS count, COALESCE(SUM(stock), 0) AS stock,
-    COALESCE(SUM(stock * price_cents), 0) AS inventoryValueCents
-    FROM products GROUP BY category`),
-  eventReport: db.query(`SELECT type, COALESCE(SUM(count), 0) AS count,
-    COALESCE(SUM(value_total), 0) AS value FROM event_totals GROUP BY type`),
-  eventUpsert: db.query(`INSERT INTO event_totals(user_id, type, count, value_total)
-    VALUES (?, ?, 1, ?)
-    ON CONFLICT(user_id, type) DO UPDATE SET
-      count = count + 1,
-      value_total = value_total + excluded.value_total`),
-};
-
-function apiProduct(row) {
-  return (
-    row && {
-      id: row.id,
-      name: row.name,
-      category: row.category,
-      priceCents: row.price_cents,
-      stock: row.stock,
-      tags: JSON.parse(row.tags),
-    }
-  );
-}
 function json(body, status = 200, headers = {}) {
   return Response.json(body, { status, headers });
 }
@@ -239,12 +140,11 @@ function listProducts(url) {
   if (limit === null || limit < 1) {
     return fail(400, "limit is invalid");
   }
-  const total = statements.productCount.get(category, category, query, query).total;
+  const listed = store.list(category, query, limit, offset);
+  const total = listed.total;
   offset = Math.min(offset, total);
   return json({
-    products: statements.productList
-      .all(category, category, query, query, limit, offset)
-      .map(apiProduct),
+    products: listed.products,
     total,
     offset,
     limit,
@@ -259,12 +159,12 @@ function getProduct(rawId) {
   if (!Number.isSafeInteger(id) || id < 1 || id > 1_000_000_000) {
     return fail(400, "id must be a positive integer");
   }
-  const product = apiProduct(statements.productById.get(id));
+  const product = store.product(id);
   return product ? json(product) : fail(404, "product not found");
 }
 
 function catalogReport() {
-  const byCategory = new Map(statements.catalogReport.all().map((row) => [row.category, row]));
+  const byCategory = new Map(store.catalog().map((row) => [row.category, row]));
   const reports = categories.map(
     (category) =>
       byCategory.get(category) || { category, count: 0, stock: 0, inventoryValueCents: 0 },
@@ -282,7 +182,7 @@ function catalogReport() {
 function eventReport() {
   const counts = { view: 0, click: 0, purchase: 0 };
   const values = { view: 0, click: 0, purchase: 0 };
-  for (const row of statements.eventReport.all()) {
+  for (const row of store.events()) {
     counts[row.type] = row.count;
     values[row.type] = row.value;
   }
@@ -311,7 +211,7 @@ async function quote(request) {
     if (!line || !integer(line.productId, 1, 1_000_000_000) || !integer(line.quantity, 1, 100)) {
       return fail(400, "quantity is invalid or unavailable");
     }
-    const product = apiProduct(statements.productById.get(line.productId));
+    const product = store.product(line.productId);
     if (!product) {
       return fail(404, "product not found");
     }
@@ -370,11 +270,11 @@ async function recordEvents(request) {
     values[event.type] += event.value;
     canonical += `${event.userId}:${event.type}:${event.value}\n`;
   }
-  db.transaction(() => {
-    for (const event of value.events) {
-      statements.eventUpsert.run(event.userId, event.type, event.value);
-    }
-  }).immediate();
+  try {
+    store.recordEvents(value.events);
+  } catch (error) {
+    return databaseFailure(error);
+  }
   return json({ counts, values, sha256: createHash("sha256").update(canonical).digest("hex") });
 }
 
@@ -413,38 +313,76 @@ function databaseFailure(error) {
   return fail(500, "database error");
 }
 
-const server = Bun.serve({
-  hostname: "0.0.0.0",
-  port,
-  idleTimeout: 60,
-  maxRequestBodySize: 16 * 1024 * 1024,
-  development: false,
-  routes: {
-    "/healthz": { GET: () => json({ status: "ok" }), HEAD: () => json({ status: "ok" }) },
-    "/products": {
-      GET: (request) => listProducts(new URL(request.url)),
-      HEAD: (request) => listProducts(new URL(request.url)),
-    },
-    "/products/:id": {
-      GET: (request) => getProduct(request.params.id),
-      HEAD: (request) => getProduct(request.params.id),
-    },
-    "/products/": {
-      GET: () => fail(400, "id must be a positive integer"),
-      HEAD: () => fail(400, "id must be a positive integer"),
-    },
-    "/reports/catalog": { GET: catalogReport, HEAD: catalogReport },
-    "/reports/events": { GET: eventReport, HEAD: eventReport },
-    "/cart/quote": { POST: quote },
-    "/events/batch": { POST: recordEvents },
-  },
-  error(error) {
-    return databaseFailure(error);
-  },
-  fetch(request) {
-    return fallback(request);
-  },
-});
+const stdlibServer =
+  router === "stdlib"
+    ? Bun.serve({
+        hostname: "0.0.0.0",
+        port,
+        reusePort: process.env.REUSE_PORT === "1",
+        idleTimeout: 60,
+        maxRequestBodySize: 16 * 1024 * 1024,
+        development: false,
+        routes: {
+          "/healthz": { GET: () => json({ status: "ok" }), HEAD: () => json({ status: "ok" }) },
+          "/products": {
+            GET: (request) => listProducts(new URL(request.url)),
+            HEAD: (request) => listProducts(new URL(request.url)),
+          },
+          "/products/:id": {
+            GET: (request) => getProduct(request.params.id),
+            HEAD: (request) => getProduct(request.params.id),
+          },
+          "/products/": {
+            GET: () => fail(400, "id must be a positive integer"),
+            HEAD: () => fail(400, "id must be a positive integer"),
+          },
+          "/reports/catalog": { GET: catalogReport, HEAD: catalogReport },
+          "/reports/events": { GET: eventReport, HEAD: eventReport },
+          "/cart/quote": { POST: quote },
+          "/events/batch": { POST: recordEvents },
+        },
+        error(error) {
+          return databaseFailure(error);
+        },
+        fetch(request) {
+          return fallback(request);
+        },
+      })
+    : null;
+
+function buildElysia() {
+  const health = () => json({ status: "ok" });
+  const route = new Elysia()
+    .get("/healthz", health)
+    .head("/healthz", health)
+    .get("/products", ({ request }) => listProducts(new URL(request.url)))
+    .head("/products", ({ request }) => listProducts(new URL(request.url)))
+    .get("/products/:id", ({ params }) => getProduct(params.id))
+    .head("/products/:id", ({ params }) => getProduct(params.id))
+    .get("/products/", () => fail(400, "id must be a positive integer"))
+    .head("/products/", () => fail(400, "id must be a positive integer"))
+    .get("/reports/catalog", catalogReport)
+    .head("/reports/catalog", catalogReport)
+    .get("/reports/events", eventReport)
+    .head("/reports/events", eventReport)
+    // No body schema is registered: quote and event handlers retain the same bounded manual reader.
+    .post("/cart/quote", ({ request }) => quote(request), { parse: "none" })
+    .post("/events/batch", ({ request }) => recordEvents(request), { parse: "none" })
+    .all("/*", ({ request }) => fallback(request))
+    .onError(({ error }) => databaseFailure(error));
+  route.listen({
+    hostname: "0.0.0.0",
+    port,
+    reusePort: process.env.REUSE_PORT === "1",
+    idleTimeout: 60,
+    maxRequestBodySize: 16 * 1024 * 1024,
+    development: false,
+  });
+  return route;
+}
+
+const elysiaApp = router === "elysia" ? buildElysia() : null;
+const server = elysiaApp?.server || stdlibServer;
 
 let shuttingDown = false;
 async function stop() {
@@ -454,11 +392,15 @@ async function stop() {
   shuttingDown = true;
   const forceStop = setTimeout(() => server.stop(true), 10_000);
   try {
-    await server.stop(false);
+    if (elysiaApp) {
+      await elysiaApp.stop(false);
+    } else {
+      await server.stop(false);
+    }
   } finally {
     clearTimeout(forceStop);
     diagnostics?.stop();
-    db.close();
+    store.close();
   }
 }
 process.on("SIGINT", stop);
