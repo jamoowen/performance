@@ -82,7 +82,7 @@ class CampaignPlanTest(unittest.TestCase):
             )
 
     def test_activation_only_changes_benchmark_manifests_and_sets_literals(self):
-        with TemporaryDirectory(dir="/private/tmp") as temporary:
+        with TemporaryDirectory() as temporary:
             repo = Path(temporary) / "ephemeral" / "cluster"
             app = repo / "apps/performance-http"
             app.mkdir(parents=True)
@@ -126,7 +126,7 @@ class CampaignPlanTest(unittest.TestCase):
         )
 
     def test_threshold_results_continue_and_restore_once(self):
-        with TemporaryDirectory(dir="/private/tmp") as temporary:
+        with TemporaryDirectory() as temporary:
             root = Path(temporary)
             app = root / "apps/performance-http"
             app.mkdir(parents=True)
@@ -169,7 +169,7 @@ class CampaignPlanTest(unittest.TestCase):
             self.assertEqual(commit.call_count, 3)
 
     def test_infrastructure_failure_halts_and_restores(self):
-        with TemporaryDirectory(dir="/private/tmp") as temporary:
+        with TemporaryDirectory() as temporary:
             root = Path(temporary)
             app = root / "apps/performance-http"
             app.mkdir(parents=True)
@@ -206,7 +206,7 @@ class CampaignPlanTest(unittest.TestCase):
             self.assertEqual(commit.call_count, 2)
 
     def test_dirty_failed_activation_restores_known_benchmark_files(self):
-        with TemporaryDirectory(dir="/private/tmp") as temporary:
+        with TemporaryDirectory() as temporary:
             root = Path(temporary)
             app = root / "apps/performance-http"
             app.mkdir(parents=True)
@@ -240,7 +240,7 @@ class CampaignPlanTest(unittest.TestCase):
             self.assertEqual(bun.read_text(), "replicas: 1\n")
 
     def test_resume_requires_the_full_recorded_configuration(self):
-        with TemporaryDirectory(dir="/private/tmp") as temporary:
+        with TemporaryDirectory() as temporary:
             root = Path(temporary)
             args = self.executor_args(root)
             entry = campaign.build_plan("scheduling")[0]
