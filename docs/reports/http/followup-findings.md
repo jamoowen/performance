@@ -29,7 +29,7 @@ The SQLite binaries differ: Go reports 3.53.4, Bun 3.53.2, and Rust 3.50.2. Rust
 - CPU is mean sampled cgroup millicores. Working set is the maximum sampled container working-set bytes; it is neither startup peak memory nor managed-heap size.
 - CFS throttling is the fraction of scheduling periods with some throttling. It is not a wall-time percentage.
 - Measurement duration and sample coverage can differ between records and must remain visible when comparing them.
-- Each run requires overall and per-operation p95 at or below 1,000 ms, HTTP failure rate at or below 1%, checks at or above 99%, and zero dropped iterations.
+- Each run requires per-operation p95 at or below 1,000 ms, HTTP failure rate at or below 1%, checks at or above 99%, and zero dropped iterations. Overall p95 is reported but has no separate configured threshold.
 
 ## Suite quality
 

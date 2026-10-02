@@ -4,7 +4,7 @@ The first runnable HTTP baseline lives in [benchmarks/http](benchmarks/http/READ
 
 ## HTTP benchmark reports
 
-Start with the [interactive follow-up report index](https://jamoowen.github.io/performance/) and read the [follow-up findings](docs/reports/http/followup-findings.md). The original [comparison report](https://jamoowen.github.io/performance/reports/http/comparison.html), [CSV](https://jamoowen.github.io/performance/reports/http/comparison.csv), and [historical findings](docs/reports/http/findings.md) remain a separate diagnostics snapshot.
+Start with the [interactive follow-up report index](https://jamoowen.github.io/performance/) and read the [follow-up findings](docs/reports/http/followup-findings.md). See the [independent fairness and metrics audit](docs/reports/http/methodology-review.md) for a review of the methodology. The original [comparison report](https://jamoowen.github.io/performance/reports/http/comparison.html), [CSV](https://jamoowen.github.io/performance/reports/http/comparison.csv), and [historical findings](docs/reports/http/findings.md) remain a separate diagnostics snapshot.
 
 Refresh the historical snapshot from the repository root after recording results:
 
