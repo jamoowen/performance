@@ -12,6 +12,7 @@
 .tools
 .ruff_cache
 results/
+docs/
 .local.mk
 .git/
 ephemeral/

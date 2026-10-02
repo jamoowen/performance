@@ -1,0 +1,16 @@
+
+
+Sampling rate: 1000.000000 microseconds. Total samples: 14353
+Top functions as <numSamples  'functionName#hash:sourceID'>
+  8066    'all#<nil>:4294967295'
+  5546    'get#<nil>:4294967295'
+   159    'json#<nil>:4294967295'
+   157    '#<nil>:4294967295'
+   105    'run#<nil>:4294967295'
+    75    'parse#<nil>:4294967295'
+    73    'onRSDefaultControllerStartFulfilled#<nil>:4294967295'
+    16    'releaseLock#<nil>:4294967295'
+    16    'onRSDefaultControllerPullFulfilled#<nil>:4294967295'
+    15    'defineProperties#<nil>:4294967295'
+    13    'listProducts#BvcglI:2'
+    12    'heapStats#<nil>:4294967295'

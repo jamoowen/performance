@@ -97,6 +97,68 @@ figcaption {
   color: #3c4043;
   font-size: 0.9rem;
 }
+.run-overlay {
+  border-width: 2px;
+}
+.run-overlay h2 {
+  margin-top: 0;
+}
+.run-overlay-notices {
+  margin: 0.5rem 0 1rem;
+  padding-left: 1.25rem;
+  color: #3c4043;
+  font-size: 0.9rem;
+}
+.run-overlay-controls,
+.run-overlay-runs > div {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 0.75rem;
+}
+.run-overlay fieldset {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  min-width: 0;
+  margin: 0;
+  border: 1px solid #dfe3e8;
+  border-radius: 0.3rem;
+}
+.run-overlay label {
+  overflow-wrap: anywhere;
+}
+.run-overlay-metric {
+  display: grid;
+  gap: 0.2rem;
+}
+.run-overlay select {
+  max-width: 100%;
+  padding: 0.25rem;
+}
+.run-overlay-runs {
+  margin-top: 0.75rem;
+}
+.run-overlay-runs > div {
+  margin-top: 0.6rem;
+  align-items: start;
+}
+.run-overlay-run {
+  display: flex;
+  align-items: center;
+  min-width: min(100%, 18rem);
+}
+.run-overlay-swatch {
+  display: inline-block;
+  width: 1.6rem;
+  height: 0;
+  margin-left: 0.35rem;
+  border-top: 3px solid var(--run-color);
+  border-top-style: var(--run-dash);
+}
+.run-overlay-chart {
+  height: 340px;
+}
 .http-history .history-grid {
   margin-top: 0.75rem;
 }
@@ -153,5 +215,8 @@ a {
   }
   .chart {
     height: 250px;
+  }
+  .run-overlay-chart {
+    height: 300px;
   }
 }

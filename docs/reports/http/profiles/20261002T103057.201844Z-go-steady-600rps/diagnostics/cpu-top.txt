@@ -1,0 +1,24 @@
+File: http-go
+Build ID: a19030dad113415d93f39519d1b4af3573f95e46
+Type: cpu
+Time: 2026-10-02 11:32:01 BST
+Duration: 30s, Total samples = 25.13s (83.76%)
+Showing nodes accounting for 21.39s, 85.12% of 25.13s total
+Dropped 525 nodes (cum <= 0.13s)
+Showing top 15 nodes out of 94
+      flat  flat%   sum%        cum   cum%
+    19.32s 76.88% 76.88%     19.38s 77.12%  runtime.cgocall
+     1.45s  5.77% 82.65%      1.45s  5.77%  internal/runtime/syscall/linux.Syscall6
+     0.29s  1.15% 83.80%      0.29s  1.15%  runtime.futex
+     0.06s  0.24% 84.04%      0.25s  0.99%  runtime.selectgo
+     0.03s  0.12% 84.16%      0.34s  1.35%  encoding/json/v2.Unmarshal
+     0.03s  0.12% 84.28%      0.23s  0.92%  encoding/json/v2.makeStructArshaler.func2
+     0.03s  0.12% 84.40%      0.34s  1.35%  github.com/mattn/go-sqlite3.(*SQLiteRows).readStepResultLocked
+     0.03s  0.12% 84.52%      0.38s  1.51%  runtime.mallocgc
+     0.03s  0.12% 84.64%      0.83s  3.30%  runtime.schedule
+     0.02s  0.08% 84.72%      0.42s  1.67%  bufio.(*Reader).Peek
+     0.02s  0.08% 84.80%      0.38s  1.51%  database/sql.(*Rows).close
+     0.02s  0.08% 84.88%     19.33s 76.92%  database/sql.(*Rows).nextLocked
+     0.02s  0.08% 84.96%      0.14s  0.56%  database/sql.(*Rows).scanLocked
+     0.02s  0.08% 85.04%      0.34s  1.35%  main.apiServer.batchEvents
+     0.02s  0.08% 85.12%      0.42s  1.67%  net/http.(*connReader).Read

@@ -21,10 +21,11 @@ SAMPLE_INTERVAL ?= 5
 DIAGNOSTICS ?= 0
 PROFILE_SECONDS ?= 30
 RESULTS_DIR ?= results/http
+PUBLISH_DIR ?= docs/reports/http
 
 -include .local.mk
 
-.PHONY: tools format format-check lint check test build build-go build-bun build-load push load load-go load-bun record-go record-bun compare
+.PHONY: tools format format-check lint check test build build-go build-bun build-load push load load-go load-bun record-go record-bun compare publish-report
 
 GOLANGCI_LINT := GOCACHE=$(CURDIR)/.cache/go-build GOMODCACHE=$(CURDIR)/.cache/go-mod GOLANGCI_LINT_CACHE=$(CURDIR)/.cache/golangci-lint $(CURDIR)/.tools/bin/golangci-lint
 RUFF := UV_CACHE_DIR=$(CURDIR)/.cache/uv UV_TOOL_DIR=$(CURDIR)/.cache/uv-tools uvx --from ruff==0.16.4 ruff
@@ -119,3 +120,6 @@ record-bun: DURATION = 5m
 
 compare:
 	UV_CACHE_DIR=$(CURDIR)/.cache/uv PYTHONPATH=benchmarks/http uv run --no-project --with plotly==7.1.0 python3 -m measure.compare --results-dir "$(RESULTS_DIR)" --output-dir "$(RESULTS_DIR)/report"
+
+publish-report: compare
+	PYTHONPATH=benchmarks/http python3 -m measure.publish --results-dir "$(RESULTS_DIR)" --output-dir "$(PUBLISH_DIR)"

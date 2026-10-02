@@ -678,6 +678,275 @@ class ReportTest(unittest.TestCase):
         self.assertIn("HTTP capture: writer stopped before final flush", document)
         self.assertIn("Passed targets", document)
 
+    def test_run_overlay_maps_individual_source_windows_and_filters_metadata(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            records = []
+            for implementation in ("go", "bun"):
+                for rate in (300, 600, 900):
+                    item = record(implementation, rate=rate)
+                    item["run_id"] = f"{implementation}-{rate}"
+                    item["metadata"]["measured_started_at_unix"] = 100
+                    item["metadata"]["measured_ended_at_unix"] = 110
+                    run = root / item["run_id"]
+                    run.mkdir()
+                    item["path"] = str(run / "result.json")
+                    (run / "http-history.json").write_text(
+                        json.dumps(
+                            {
+                                "schema_version": 1,
+                                "status": "complete",
+                                "warnings": [],
+                                "totals": {},
+                                "buckets": [
+                                    {
+                                        "start_seconds": 0,
+                                        "end_seconds": 4,
+                                        "requests": rate * 4,
+                                        "latency_ms": {"med": 2, "p(95)": 5, "p(99)": 8},
+                                    }
+                                ],
+                            }
+                        )
+                    )
+                    (run / "resources.jsonl").write_text(
+                        "\n".join(
+                            json.dumps(sample)
+                            for sample in (
+                                {
+                                    "type": "sample",
+                                    "cpu_timestamp_ms": 101000,
+                                    "cpu_seconds": 1,
+                                    "container_id": "a",
+                                    "pod_uid": "pod",
+                                    "memory_working_set_bytes": 2 * 1024**2,
+                                    "memory_working_set_timestamp_ms": 101000,
+                                    "memory_rss_bytes": 1024**2,
+                                    "memory_rss_timestamp_ms": 101000,
+                                },
+                                {
+                                    "type": "sample",
+                                    "cpu_timestamp_ms": 102000,
+                                    "cpu_seconds": 1.1,
+                                    "container_id": "a",
+                                    "pod_uid": "pod",
+                                    "memory_working_set_bytes": 3 * 1024**2,
+                                    "memory_working_set_timestamp_ms": 102000,
+                                    "memory_rss_bytes": 2 * 1024**2,
+                                    "memory_rss_timestamp_ms": 102000,
+                                },
+                            )
+                        )
+                    )
+                    records.append(item)
+            overlay = compare.run_overlay(records)
+        self.assertEqual(overlay["rates"], [300, 600, 900])
+        self.assertEqual(len(overlay["runs"]), 6)
+        self.assertTrue(all(len(run["series"]["p95_latency"]) == 1 for run in overlay["runs"]))
+        first = overlay["runs"][0]
+        self.assertEqual(
+            first["series"]["p95_latency"][0],
+            {
+                "x": 4,
+                "y": 5,
+                "start": 0,
+                "end": 4,
+                "requests": 1200,
+            },
+        )
+        self.assertEqual(first["series"]["completed_rps"][0]["y"], 300)
+        self.assertEqual(first["series"]["cpu_millicores"][0]["x"], 2.0)
+        self.assertAlmostEqual(first["series"]["cpu_millicores"][0]["y"], 100.0)
+        self.assertNotIn("nonmatching settings", " ".join(overlay["notices"]))
+        self.assertEqual(
+            [run["dash"] for run in overlay["runs"][:3]],
+            ["solid", "dash", "dot"],
+        )
+        self.assertEqual(
+            [run["dash"] for run in overlay["runs"][3:]],
+            ["solid", "dash", "dot"],
+        )
+
+    def test_run_overlay_keeps_failed_and_legacy_runs_without_inventing_points(self):
+        failed = record("bun", thresholds=["http_req_duration"], rate=900)
+        legacy = record("go", rate=300)
+        malformed = record("go", rate=600)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name, item in (("failed", failed), ("legacy", legacy), ("malformed", malformed)):
+                run = root / name
+                run.mkdir()
+                item["path"] = str(run / "result.json")
+            (root / "failed" / "http-history.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "status": "complete",
+                        "warnings": [],
+                        "totals": {},
+                        "buckets": [
+                            {
+                                "start_seconds": 3,
+                                "end_seconds": 3,
+                                "requests": 100,
+                                "latency_ms": {"p(95)": 7},
+                            },
+                            {
+                                "start_seconds": 3,
+                                "end_seconds": 5,
+                                "requests": 400,
+                                "latency_ms": {"p(95)": 9},
+                            },
+                        ],
+                    }
+                )
+            )
+            (root / "malformed" / "resources.jsonl").write_text(
+                json.dumps({"type": "sample", "memory_rss_bytes": "bad"})
+            )
+            overlay = compare.run_overlay([failed, legacy, malformed])
+            output = root / "report"
+            with patch.object(
+                compare, "plotly_javascript", return_value="window.Plotly={newPlot(){}}"
+            ):
+                compare.render([failed, legacy, malformed], output)
+            document = (output / "comparison.html").read_text()
+        self.assertEqual(
+            overlay["runs"][0]["series"]["p95_latency"],
+            [
+                {
+                    "x": 5,
+                    "y": 9,
+                    "start": 3,
+                    "end": 5,
+                    "requests": 400,
+                }
+            ],
+        )
+        self.assertEqual(overlay["runs"][1]["series"]["p95_latency"], [])
+        self.assertEqual(overlay["runs"][2]["series"]["rss_mib"], [])
+        self.assertTrue(overlay["runs"][1]["http_warnings"])
+        self.assertIn("Failed targets", overlay["runs"][0]["label"])
+        self.assertIn("data-overlay-runtime='go'", document)
+        self.assertIn("data-overlay-rate='900'", document)
+        self.assertIn("data-overlay-run='run-1'", document)
+        self.assertIn("id='run-overlay'", document)
+        self.assertIn("window.runOverlay=", document)
+        self.assertIn("No runs are selected", document)
+
+    def test_run_overlay_payload_uses_script_safe_json_and_unknown_compatibility_notice(self):
+        item = record(rate=300)
+        item["run_id"] = "unsafe</script><img src=x>"
+        unknown = {"status": "invalid", "path": ""}
+        overlay = compare.run_overlay([item, unknown])
+        self.assertTrue(any("unknown compatibility" in notice for notice in overlay["notices"]))
+        self.assertIn("\\u003c/script\\u003e", compare.json_for_script(overlay))
+        float_rate = compare.run_overlay_card(compare.run_overlay([record(rate=300.0)]))
+        self.assertIn("data-overlay-rate='300'", float_rate)
+
+    def test_run_overlay_preserves_known_http_and_resource_gaps(self):
+        item = record(rate=300)
+        item["metadata"]["measured_started_at_unix"] = 100
+        item["metadata"]["measured_ended_at_unix"] = 110
+        with tempfile.TemporaryDirectory() as directory:
+            run = Path(directory) / "run"
+            run.mkdir()
+            item["path"] = str(run / "result.json")
+            (run / "http-history.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "status": "complete",
+                        "warnings": [],
+                        "totals": {},
+                        "buckets": [
+                            {
+                                "start_seconds": 0,
+                                "end_seconds": 2,
+                                "requests": 20,
+                                "latency_ms": {"p(95)": None},
+                            },
+                            {
+                                "start_seconds": 2,
+                                "end_seconds": 4,
+                                "requests": 20,
+                                "latency_ms": {"p(95)": -1},
+                            },
+                            {
+                                "start_seconds": 4,
+                                "end_seconds": 6,
+                                "requests": 20,
+                                "latency_ms": {"p(95)": 7},
+                            },
+                        ],
+                    }
+                )
+            )
+            samples = [
+                {
+                    "type": "sample",
+                    "cpu_timestamp_ms": 101000,
+                    "cpu_seconds": 1,
+                    "container_id": "a",
+                    "pod_uid": "pod",
+                    "memory_working_set_bytes": 2 * 1024**2,
+                    "memory_working_set_timestamp_ms": 101000,
+                },
+                {
+                    "type": "sample",
+                    "cpu_timestamp_ms": 102000,
+                    "cpu_seconds": 1.1,
+                    "container_id": "a",
+                    "pod_uid": "pod",
+                    "memory_working_set_bytes": "bad",
+                    "memory_working_set_timestamp_ms": 102000,
+                },
+                {
+                    "type": "sample",
+                    "cpu_timestamp_ms": 103000,
+                    "cpu_seconds": 0.1,
+                    "container_id": "a",
+                    "pod_uid": "pod",
+                    "memory_working_set_bytes": 3 * 1024**2,
+                    "memory_working_set_timestamp_ms": 103000,
+                },
+                {
+                    "type": "sample",
+                    "cpu_timestamp_ms": 104000,
+                    "container_id": "a",
+                    "pod_uid": "pod",
+                },
+                {
+                    "type": "sample",
+                    "cpu_timestamp_ms": 105000,
+                    "cpu_seconds": 0.2,
+                    "container_id": "a",
+                    "pod_uid": "pod",
+                },
+                {
+                    "type": "sample",
+                    "cpu_timestamp_ms": 106000,
+                    "cpu_seconds": 0.3,
+                    "container_id": "a",
+                    "pod_uid": "pod",
+                },
+            ]
+            (run / "resources.jsonl").write_text(
+                "\n".join(json.dumps(sample) for sample in samples)
+            )
+            http, _ = compare.overlay_http_series(item, "p95_latency")
+            cpu = compare.overlay_resource_series(item, "cpu_millicores")
+            working = compare.overlay_resource_series(item, "working_set_mib")
+            missing_bounds = record(rate=300)
+            missing_bounds["path"] = item["path"]
+            no_bounds = compare.overlay_resource_series(missing_bounds, "cpu_millicores")
+        self.assertEqual([point["y"] for point in http], [None, None, 7])
+        self.assertAlmostEqual(cpu[0]["y"], 100.0)
+        self.assertEqual([point["y"] for point in cpu[1:3]], [None, None])
+        self.assertAlmostEqual(cpu[3]["y"], 100.0)
+        self.assertEqual([point["y"] for point in working], [2.0, None, 3.0])
+        self.assertEqual(no_bounds, [])
+
 
 if __name__ == "__main__":
     unittest.main()

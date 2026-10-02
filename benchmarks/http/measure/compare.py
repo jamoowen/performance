@@ -57,6 +57,7 @@ CSV_FIELDS = (
     "restart_delta",
 )
 RUNTIME_COLORS = {"go": "#3977af", "bun": "#d56a27"}
+RATE_DASHES = ("solid", "dash", "dot", "dashdot", "longdash", "longdashdot")
 ESSENTIAL_RESOURCE_WARNINGS = {
     "insufficient distinct CPU samples",
     "CPU counter reset",
@@ -678,6 +679,256 @@ def http_history_figures(record, index):
     return figures, warnings
 
 
+def overlay_http_series(record, metric):
+    """Return only trustworthy HTTP windows, using their actual completion bounds."""
+    history, warnings = http_history(record)
+    if history is None:
+        return [], warnings
+    values = []
+    latency_key = {"p50_latency": "med", "p95_latency": "p(95)", "p99_latency": "p(99)"}.get(metric)
+    for bucket in history.get("buckets", []):
+        if not isinstance(bucket, dict):
+            continue
+        start, end, requests = (
+            number(bucket.get("start_seconds")),
+            number(bucket.get("end_seconds")),
+            number(bucket.get("requests")),
+        )
+        if start is None or end is None or requests is None or requests < 0 or end <= start:
+            continue
+        if latency_key:
+            value = number(mapping(bucket.get("latency_ms")).get(latency_key))
+            # Keep a valid window with a missing/bad percentile as a gap. Removing
+            # it would let Plotly draw a line across a known missing observation.
+            if value is not None and value < 0:
+                value = None
+        else:
+            value = requests / (end - start)
+        values.append(
+            {
+                "x": end,
+                "y": value,
+                "start": start,
+                "end": end,
+                "requests": requests,
+            }
+        )
+    return values, warnings
+
+
+def overlay_resource_series(record, metric):
+    samples = history_samples(record)
+    start, end = measurement_bounds(record)
+    if start is None or end is None:
+        return []
+    if metric == "cpu_millicores":
+        # Match the run card's source bounds and CPU units, while retaining
+        # reset and missing observations as gaps.
+        values, prior, seen = [], None, set()
+        for sample in sorted(samples, key=lambda item: number(item.get("cpu_timestamp_ms")) or -1):
+            timestamp = number(sample.get("cpu_timestamp_ms"))
+            if not in_bounds(timestamp, start, end) or timestamp in seen:
+                continue
+            seen.add(timestamp)
+            elapsed = (timestamp - (start or 0)) / 1000
+            seconds = number(sample.get("cpu_seconds"))
+            identity = (sample.get("pod_uid"), sample.get("container_id"))
+            if seconds is None:
+                values.append({"x": elapsed, "y": None})
+                prior = None
+                continue
+            if prior is not None:
+                duration, delta = (timestamp - prior[0]) / 1000, seconds - prior[1]
+                if duration > 0 and delta >= 0 and identity == prior[2]:
+                    values.append({"x": elapsed, "y": 1000 * delta / duration})
+                else:
+                    values.append({"x": elapsed, "y": None})
+            prior = (timestamp, seconds, identity)
+        return values
+    memory_keys = {
+        "working_set_mib": ("memory_working_set_bytes", "memory_working_set_timestamp_ms"),
+        "rss_mib": ("memory_rss_bytes", "memory_rss_timestamp_ms"),
+    }
+    if metric not in memory_keys:
+        return []
+    key, timestamp_key = memory_keys[metric]
+    # Match the run card's source bounds and memory units, while preserving
+    # missing or invalid samples as gaps instead of joining over them.
+    values, seen = [], set()
+    for sample in samples:
+        timestamp = number(sample.get(timestamp_key))
+        if not in_bounds(timestamp, start, end) or timestamp in seen:
+            continue
+        seen.add(timestamp)
+        amount = number(sample.get(key))
+        values.append(
+            {
+                "x": (timestamp - (start or 0)) / 1000,
+                "y": amount / 1024**2 if amount is not None and amount >= 0 else None,
+            }
+        )
+    return sorted(values, key=lambda point: point["x"])
+
+
+def overlay_run_label(record):
+    row = record_row(record)
+    status_label, _, _ = run_status(record)
+    return (
+        f"{row['implementation']} · {display(row['target_rps'])} RPS · "
+        f"{row['run_id']} · {status_label}"
+    )
+
+
+def run_overlay(records):
+    """Build independent per-run traces; this deliberately never pools recordings."""
+    rates = sorted(
+        {
+            value
+            for record in records
+            if (value := number(mapping(nested(record, "metadata", "settings")).get("rate")))
+            is not None
+        }
+    )
+    dash_by_rate = {rate: RATE_DASHES[index % len(RATE_DASHES)] for index, rate in enumerate(rates)}
+    metrics = (
+        ("p95_latency", "p95 latency", "ms"),
+        ("p50_latency", "p50 latency", "ms"),
+        ("p99_latency", "p99 latency", "ms"),
+        ("cpu_millicores", "CPU", "millicores"),
+        ("working_set_mib", "Working set", "MiB"),
+        ("rss_mib", "RSS", "MiB"),
+        ("completed_rps", "Completed requests", "requests/s"),
+    )
+    runs = []
+    incomplete = []
+    missing_http = []
+    for index, record in enumerate(records, 1):
+        row = record_row(record)
+        runtime = row["implementation"]
+        rate = number(row["target_rps"])
+        status_label, _, status = run_status(record)
+        history, history_warnings = http_history(record)
+        if history is None:
+            missing_http.append(run_id(record))
+        if status != "healthy":
+            incomplete.append(run_id(record))
+        series = {}
+        for name, _, _ in metrics:
+            if name in {"p50_latency", "p95_latency", "p99_latency", "completed_rps"}:
+                series[name], _ = overlay_http_series(record, name)
+            else:
+                series[name] = overlay_resource_series(record, name)
+        runs.append(
+            {
+                "id": f"run-{index}",
+                "label": overlay_run_label(record),
+                "runtime": runtime,
+                "rate": rate,
+                "status": status_label,
+                "color": RUNTIME_COLORS.get(runtime, "#555"),
+                "dash": dash_by_rate.get(rate, "solid"),
+                "swatch_dash": {
+                    "solid": "solid",
+                    "dash": "dashed",
+                    "dot": "dotted",
+                    "dashdot": "dashed",
+                    "longdash": "dashed",
+                    "longdashdot": "dashed",
+                }.get(dash_by_rate.get(rate, "solid"), "solid"),
+                "series": series,
+                "http_warnings": history_warnings,
+            }
+        )
+    compatibility = []
+    for record in records:
+        if not isinstance(record, dict) or not isinstance(record.get("metadata"), dict):
+            compatibility.append(None)
+            continue
+        normalized = record.copy()
+        metadata = record["metadata"].copy()
+        settings = mapping(metadata.get("settings")).copy()
+        settings["rate"] = 0
+        metadata["settings"] = settings
+        normalized["metadata"] = metadata
+        compatibility.append(group_key(normalized))
+    known_compatibility = {key for key in compatibility if key is not None}
+    for run, key in zip(runs, compatibility, strict=True):
+        run["compatibility"] = key
+    notices = [
+        "Runs are aligned by elapsed time, not recorded simultaneously. Each line is an individual recording; no values are pooled or averaged.",
+        "Latency points are completed-window percentiles, not whole-run p95s. Resource samples have their own cadence.",
+    ]
+    if len(records) < 2:
+        notices.append("Only one run is loaded, so this view cannot compare a baseline.")
+    if len(known_compatibility) > 1:
+        notices.append(
+            "Loaded runs use nonmatching settings beyond target RPS; compare them only with that difference in mind."
+        )
+    if any(key is None for key in compatibility):
+        notices.append(
+            "Some runs have unknown compatibility because their recorded settings are incomplete."
+        )
+    if incomplete:
+        notices.append(
+            "Incomplete or failed runs remain selectable and are labelled in the run list."
+        )
+    if missing_http:
+        notices.append(
+            "Some runs have no usable HTTP history, so latency and completed-request traces may be absent."
+        )
+    return {
+        "metrics": [{"id": name, "label": label, "unit": unit} for name, label, unit in metrics],
+        "rates": rates,
+        "runs": runs,
+        "notices": notices,
+    }
+
+
+def run_overlay_card(payload):
+    runtime_controls = "".join(
+        f"<label><input type='checkbox' data-overlay-runtime='{runtime}' checked>"
+        f"<span class='run-overlay-swatch' style='--run-color:{RUNTIME_COLORS[runtime]};--run-dash:solid' aria-hidden='true'></span> "
+        f"{runtime.title()}</label>"
+        for runtime in ("go", "bun")
+        if any(run["runtime"] == runtime for run in payload["runs"])
+    )
+    rate_controls = "".join(
+        f"<label><input type='checkbox' data-overlay-rate='{html.escape(display(rate))}' checked>"
+        "<span class='run-overlay-swatch' style='--run-color:#555;--run-dash:"
+        f"{('solid', 'dashed', 'dotted')[index] if index < 3 else 'dashed'}' aria-hidden='true'></span> "
+        f"{html.escape(display(rate))} RPS</label>"
+        for index, rate in enumerate(payload["rates"])
+    )
+    metric_options = "".join(
+        f"<option value='{html.escape(metric['id'])}'>{html.escape(metric['label'])}</option>"
+        for metric in payload["metrics"]
+    )
+    run_controls = "".join(
+        "<label class='run-overlay-run'>"
+        f"<input type='checkbox' data-overlay-run='{html.escape(run['id'])}' checked>"
+        f"<span class='run-overlay-swatch' style='--run-color:{html.escape(run['color'])};--run-dash:{html.escape(run['swatch_dash'])}' aria-hidden='true'></span>"
+        f" {html.escape(run['label'])}</label>"
+        for run in payload["runs"]
+    )
+    notices = "".join(f"<li>{html.escape(notice)}</li>" for notice in payload["notices"])
+    return (
+        "<section class='run-overlay' aria-labelledby='compare-runs-heading'>"
+        "<h2 id='compare-runs-heading'>Compare runs</h2>"
+        "<p>Choose a metric and overlay the recorded samples from selected runs.</p>"
+        f"<ul class='run-overlay-notices'>{notices}</ul>"
+        "<div class='run-overlay-controls'>"
+        f"<fieldset><legend>Runtime</legend>{runtime_controls}</fieldset>"
+        f"<fieldset><legend>Target RPS</legend>{rate_controls}</fieldset>"
+        "<label class='run-overlay-metric'>Metric "
+        f"<select id='run-overlay-metric'>{metric_options}</select></label></div>"
+        "<details class='run-overlay-runs'><summary>Individual runs</summary>"
+        f"<div>{run_controls}</div></details>"
+        "<p id='run-overlay-message' class='history-unavailable' role='status' aria-live='polite'></p>"
+        "<p id='run-overlay-selection-note' class='history-note' aria-live='polite'></p>"
+        "<div class='chart run-overlay-chart' id='run-overlay'></div></section>"
+    )
+
+
 def history_figures(record, index):
     samples = history_samples(record)
     if not samples:
@@ -921,6 +1172,7 @@ def render(records, output):
     output.mkdir(parents=True, exist_ok=True)
     write_csv(records, output)
     summaries, _ = summarize(records)
+    overlay = run_overlay(records)
     charts = []
     cards = []
     for index, record in enumerate(records, 1):
@@ -954,6 +1206,7 @@ def render(records, output):
         + awaiting_text
         + " <a href='comparison.csv'>Download full CSV</a>.</p>"
     )
+    document += run_overlay_card(overlay)
     document += (
         "<h2>Per-run results</h2><p>CPU values are averages between source readings. Memory samples show working set and RSS; histories use elapsed time from the measured run.</p>"
         + "".join(cards)
@@ -973,6 +1226,8 @@ def render(records, output):
         + plotly_javascript()
         + "</script><script>window.reportCharts="
         + json_for_script(charts)
+        + ";</script><script>window.runOverlay="
+        + json_for_script(overlay)
         + ";</script><script>"
         + (Path(__file__).parent / "report.js").read_text()
         + "</script></body></html>"
