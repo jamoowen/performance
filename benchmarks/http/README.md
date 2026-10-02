@@ -1,4 +1,4 @@
-# HTTP SQLite baseline
+# HTTP SQLite benchmark
 
 This compares Go `net/http` `ServeMux` and Bun `Bun.serve` route tables with the same deterministic catalog, JSON contract, and filesystem SQLite workload. Both support `HEAD` on read routes, use strict single-segment product parameters, and retain their routers’ native canonical-path redirects and normalization. Give each server its own database file or volume.
 
@@ -61,6 +61,25 @@ docker run --rm -e BASE_URL=http://host.docker.internal:8080 -e PROFILE=steady -
 The images are `ghcr.io/OWNER/performance-http-go`, `ghcr.io/OWNER/performance-http-bun`, and `ghcr.io/OWNER/performance-http-load`. In a cluster, give the load container `BASE_URL=http://SERVICE.NAMESPACE.svc.cluster.local:8080`. Mount a writable `/data` volume: Go runs as UID 65534 and Bun as UID 1000. A new volume/path resets data; an existing database rejects a different seed count.
 
 Smoke performs 20 iterations. Mixed traffic is 35% list, 25% detail, 15% catalog report, 15% quote, and 10% event batches: 90% reads and 10% writes. Steady uses a constant arrival rate. Stress holds RATE for 20 seconds, then RATE×2 and RATE×3 for `DURATION`, before a 10-second ramp-down. Console output includes p50/p95/p99, errors, dropped iterations for arrival profiles, and per-operation p95 thresholds. Size VUs high enough that dropped iterations measure generator capacity rather than application capacity.
+
+## Optional runtime diagnostics
+
+Use diagnostics only for a separate steady-profile recording with `DIAGNOSTICS=1` and the recorder diagnostics option. They are collected per process and are not benchmark ranking inputs. CPU time and database wait time answer different questions: CPU is work scheduled by the process, while database waits show time spent waiting for a pooled connection. Go allocation and GC counters help identify managed-runtime pressure, but per-process heap values do not attribute native-C SQLite allocations. The report records the actual Go `GOMAXPROCS`; it can be at least 2 even when a container CPU quota is 1.
+
+Profiling and block or mutex sampling add overhead. Treat each diagnostic recording as an instrumented experiment, not a pure baseline or a ranking claim.
+
+Use the following controlled six-run protocol: record Go once each at `RATE=300`, `RATE=600`, and `RATE=900` in that ascending order, then record Bun once each at the same ascending rates. Every run uses `PROFILE=steady`, `WORKLOAD=mixed`, `DURATION=2m`, `WARMUP_DURATION=60s`, `DIAGNOSTICS=1`, `PROFILE_SECONDS=30`, `SEED_COUNT=5000`, `PREALLOCATED_VUS=1000`, `MAX_VUS=2000`, `P95_MS=1000`, `MAX_ERROR_RATE=0.01`, and `SAMPLE_INTERVAL=5`. Configure each app pod with `DIAGNOSTICS=1` in the new image deployment, CPU request and limit of `1`, and memory request and limit of `512Mi`; use `MAX_OPEN_CONNS=1` for Go, while Bun uses its single synchronous connection. Publish and activate each app through the usual Git/Flux workflow before its run.
+
+Use these `RATE=300` commands to begin each API's series; finish Go with `RATE=600` and `RATE=900` before beginning Bun, then use Bun at `RATE=600` and `RATE=900`.
+
+```sh
+make record-go PROFILE=steady WORKLOAD=mixed RATE=300 DURATION=2m WARMUP_DURATION=60s DIAGNOSTICS=1 PROFILE_SECONDS=30 SEED_COUNT=5000 PREALLOCATED_VUS=1000 MAX_VUS=2000 P95_MS=1000 MAX_ERROR_RATE=0.01 SAMPLE_INTERVAL=5
+make record-bun PROFILE=steady WORKLOAD=mixed RATE=300 DURATION=2m WARMUP_DURATION=60s DIAGNOSTICS=1 PROFILE_SECONDS=30 SEED_COUNT=5000 PREALLOCATED_VUS=1000 MAX_VUS=2000 P95_MS=1000 MAX_ERROR_RATE=0.01 SAMPLE_INTERVAL=5
+make compare
+go tool pprof -http=127.0.0.1:0 results/http/RUN/diagnostics/cpu.pprof
+```
+
+Run each rate once; do not repeat it as a stress test or retry it when the HTTP thresholds fail. A failed threshold remains a valid experiment result. The report presents unsent iterations and latency separately from HTTP failures. The Go admin listener is loopback-only at `127.0.0.1:6060`; the recorder reaches it through SSH port forwarding, so diagnostics add no NodePort or public API access. A recording saves the CPU profile and top view, raw runtime JSON, and Go heap, allocation, block, and mutex profiles before and after capture. The 30-second diagnostic capture is a subset of the two-minute recording; its overlap with the measured window is reported separately. CPU profile formats are runtime-specific: Bun JSC output is not a Chrome `.cpuprofile`, and native SQLite/C work remains outside managed-heap attribution. Summed database wait time can exceed capture wall time because requests wait concurrently, and it is not CPU time.
 
 Products and users are immutable. Events are bounded counters (at most `3 * SEED_COUNT` keys), not an event log. JSON errors have an `error` field; malformed input is 400, missing rows 404, wrong methods 405 with `Allow`, non-JSON POSTs 415, and bodies over 1 MiB 413. Quotes use integer cents: `SAVE10` floors `subtotal * 10 / 100`, then tax floors `(subtotal - discount) * 20 / 100`. Ordinary integer JSON inputs are shared; lexical forms such as `1.0` are outside the shared contract.
 

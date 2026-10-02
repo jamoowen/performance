@@ -2,6 +2,7 @@ import { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
+import { diagnosticsEnabled, startDiagnostics } from "./diagnostics.js";
 
 const categories = ["books", "electronics", "home", "sports", "toys"];
 const maxBodyBytes = 1024 * 1024;
@@ -104,6 +105,7 @@ function initializeDatabase() {
 
 configureDatabase();
 initializeDatabase();
+const diagnostics = diagnosticsEnabled() ? startDiagnostics() : null;
 console.error(
   `runtime=bun-${Bun.version} sqlite_version=${db.query("SELECT sqlite_version() AS version").get().version} seed_count=${seedCount} db_path=${dbPath} max_open_conns=1`,
 );
@@ -455,6 +457,7 @@ async function stop() {
     await server.stop(false);
   } finally {
     clearTimeout(forceStop);
+    diagnostics?.stop();
     db.close();
   }
 }

@@ -36,6 +36,11 @@ func main() {
 		panic(err)
 	}
 	defer func() { _ = store.close() }()
+	stopDiagnostics, err := startDiagnostics(store)
+	if err != nil {
+		panic(err)
+	}
+	defer func() { _ = stopDiagnostics() }()
 	version, err := store.sqliteVersion()
 	if err != nil {
 		panic(err)
@@ -70,6 +75,7 @@ func main() {
 		if err := server.Shutdown(shutdownContext); err != nil {
 			_ = server.Close()
 		}
+		_ = stopDiagnostics()
 		close(shutdownDone)
 	}()
 	err = server.ListenAndServe()
