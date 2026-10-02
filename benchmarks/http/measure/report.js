@@ -60,6 +60,7 @@ function renderRunOverlay() {
     (run) =>
       checked("[data-overlay-runtime]", "overlayRuntime", run.runtime) &&
       checked("[data-overlay-rate]", "overlayRate", String(run.rate)) &&
+      checked("[data-overlay-variant]", "overlayVariant", run.variant) &&
       checked("[data-overlay-run]", "overlayRun", run.id),
   );
   if (!selectedRuns.length) {
@@ -125,6 +126,7 @@ function renderRunOverlay() {
           sample.requests,
         ]),
         connectgaps: false,
+        opacity: run.opacity,
         line: { color: run.color, dash: run.dash },
         marker: { color: run.color },
         hovertemplate: hasWindow
@@ -153,7 +155,7 @@ function renderRunOverlay() {
 }
 
 for (const control of document.querySelectorAll(
-  "[data-overlay-runtime], [data-overlay-rate], [data-overlay-run], #run-overlay-metric",
+  "[data-overlay-runtime], [data-overlay-rate], [data-overlay-variant], [data-overlay-run], #run-overlay-metric",
 )) {
   control.addEventListener("change", renderRunOverlay);
 }

@@ -15,6 +15,9 @@ CSV_FIELDS = (
     "path",
     "date",
     "implementation",
+    "experiment",
+    "variant",
+    "repetition",
     "target_rps",
     "profile",
     "workload",
@@ -56,7 +59,12 @@ CSV_FIELDS = (
     "cluster_after_pressure",
     "restart_delta",
 )
-RUNTIME_COLORS = {"go": "#3977af", "bun": "#d56a27"}
+RUNTIME_COLORS = {"go": "#3977af", "bun": "#d56a27", "rust": "#3c9d68"}
+VARIANT_COLORS = {
+    "go": ("#3977af", "#78a9cf", "#a9cae1", "#24557f"),
+    "bun": ("#d56a27", "#e69a70", "#f0c3aa", "#9d4317"),
+    "rust": ("#3c9d68", "#80bd9a", "#b4d9c2", "#256344"),
+}
 RATE_DASHES = ("solid", "dash", "dot", "dashdot", "longdash", "longdashdot")
 ESSENTIAL_RESOURCE_WARNINGS = {
     "insufficient distinct CPU samples",
@@ -119,7 +127,7 @@ def validation_errors(record):
         metadata = record.get("metadata")
         if not isinstance(metadata, dict):
             errors.append("metadata is missing")
-        elif metadata.get("implementation") not in {"go", "bun"}:
+        elif metadata.get("implementation") not in {"go", "bun", "rust"}:
             errors.append("implementation is missing or unsupported")
         elif not isinstance(metadata.get("settings"), dict):
             errors.append("settings is missing")
@@ -162,6 +170,9 @@ def record_row(record):
         "path": record_path(record),
         "date": nested(record, "metadata", "measured_started_at_unix"),
         "implementation": nested(record, "metadata", "implementation") or "unknown",
+        "experiment": nested(record, "metadata", "experiment") or "baseline",
+        "variant": nested(record, "metadata", "variant") or "baseline",
+        "repetition": nested(record, "metadata", "repetition"),
         "target_rps": settings.get("rate"),
         "profile": settings.get("profile"),
         "workload": settings.get("workload"),
@@ -235,6 +246,9 @@ def group_label(record):
     settings = mapping(nested(record, "metadata", "settings"))
     resources = mapping(nested(record, "metadata", "cluster", "workload", "resources"))
     limits = mapping(resources.get("limits"))
+    configuration = mapping(nested(record, "metadata", "cluster", "workload", "configuration"))
+    variant = nested(record, "metadata", "variant")
+    backend = configuration.get("BACKEND")
     diagnostics = (
         "diagnostic/instrumented"
         if settings.get("diagnostics", False)
@@ -246,11 +260,16 @@ def group_label(record):
         == "1"
         else "baseline"
     )
-    return (
+    label = (
         f"{display(settings.get('rate'))} RPS · {display(settings.get('profile'))} · "
         f"{display(settings.get('workload'))} · {display(settings.get('duration'))} · "
         f"CPU {display(limits.get('cpu'))} · memory {display(limits.get('memory'))} · {diagnostics}"
     )
+    if variant and variant != "baseline":
+        label += f" · {variant}"
+    if backend and backend not in str(variant):
+        label += f" · backend {backend}"
+    return label
 
 
 def diagnostics_detail(record, output):
@@ -364,7 +383,9 @@ def summarize(records):
     summaries = []
     for key, runs in groups.items():
         values = {}
-        for implementation in ("go", "bun"):
+        for implementation in sorted(
+            {nested(run, "metadata", "implementation") for run in runs} - {None}
+        ):
             own = [
                 run for run in runs if nested(run, "metadata", "implementation") == implementation
             ]
@@ -389,7 +410,7 @@ def summarize(records):
                 "key": key,
                 "label": group_label(runs[0]),
                 "runtimes": values,
-                "awaiting": sorted({"go", "bun"} - set(values)),
+                "awaiting": [],
                 "all_failed": [
                     runtime for runtime, value in values.items() if not value["healthy_runs"]
                 ],
@@ -774,7 +795,7 @@ def overlay_run_label(record):
     row = record_row(record)
     status_label, _, _ = run_status(record)
     return (
-        f"{row['implementation']} · {display(row['target_rps'])} RPS · "
+        f"{row['implementation']} · {row['variant']} · {display(row['target_rps'])} RPS · "
         f"{row['run_id']} · {status_label}"
     )
 
@@ -790,6 +811,8 @@ def run_overlay(records):
         }
     )
     dash_by_rate = {rate: RATE_DASHES[index % len(RATE_DASHES)] for index, rate in enumerate(rates)}
+    variants = sorted({record_row(record)["variant"] for record in records})
+    variant_index = {variant: index for index, variant in enumerate(variants)}
     metrics = (
         ("p95_latency", "p95 latency", "ms"),
         ("p50_latency", "p50 latency", "ms"),
@@ -823,10 +846,14 @@ def run_overlay(records):
                 "id": f"run-{index}",
                 "label": overlay_run_label(record),
                 "runtime": runtime,
+                "variant": row["variant"],
                 "rate": rate,
                 "status": status_label,
-                "color": RUNTIME_COLORS.get(runtime, "#555"),
+                "color": VARIANT_COLORS.get(runtime, ("#555",))[
+                    variant_index[row["variant"]] % len(VARIANT_COLORS.get(runtime, ("#555",)))
+                ],
                 "dash": dash_by_rate.get(rate, "solid"),
+                "opacity": 1 if row["repetition"] in (None, 1) else 0.55,
                 "swatch_dash": {
                     "solid": "solid",
                     "dash": "dashed",
@@ -879,6 +906,7 @@ def run_overlay(records):
     return {
         "metrics": [{"id": name, "label": label, "unit": unit} for name, label, unit in metrics],
         "rates": rates,
+        "variants": variants,
         "runs": runs,
         "notices": notices,
     }
@@ -887,9 +915,9 @@ def run_overlay(records):
 def run_overlay_card(payload):
     runtime_controls = "".join(
         f"<label><input type='checkbox' data-overlay-runtime='{runtime}' checked>"
-        f"<span class='run-overlay-swatch' style='--run-color:{RUNTIME_COLORS[runtime]};--run-dash:solid' aria-hidden='true'></span> "
+        f"<span class='run-overlay-swatch' style='--run-color:{RUNTIME_COLORS.get(runtime, '#555')};--run-dash:solid' aria-hidden='true'></span> "
         f"{runtime.title()}</label>"
-        for runtime in ("go", "bun")
+        for runtime in sorted({run["runtime"] for run in payload["runs"]})
         if any(run["runtime"] == runtime for run in payload["runs"])
     )
     rate_controls = "".join(
@@ -898,6 +926,11 @@ def run_overlay_card(payload):
         f"{('solid', 'dashed', 'dotted')[index] if index < 3 else 'dashed'}' aria-hidden='true'></span> "
         f"{html.escape(display(rate))} RPS</label>"
         for index, rate in enumerate(payload["rates"])
+    )
+    variants = sorted({run["variant"] for run in payload["runs"]})
+    variant_controls = "".join(
+        f"<label><input type='checkbox' data-overlay-variant='{html.escape(variant)}' checked><span class='run-overlay-swatch' style='--run-color:{html.escape(next((run['color'] for run in payload['runs'] if run['variant'] == variant), '#555'))};--run-dash:solid' aria-hidden='true'></span> {html.escape(variant)}</label>"
+        for variant in variants
     )
     metric_options = "".join(
         f"<option value='{html.escape(metric['id'])}'>{html.escape(metric['label'])}</option>"
@@ -919,6 +952,7 @@ def run_overlay_card(payload):
         "<div class='run-overlay-controls'>"
         f"<fieldset><legend>Runtime</legend>{runtime_controls}</fieldset>"
         f"<fieldset><legend>Target RPS</legend>{rate_controls}</fieldset>"
+        f"<fieldset><legend>Variant</legend>{variant_controls}</fieldset>"
         "<label class='run-overlay-metric'>Metric "
         f"<select id='run-overlay-metric'>{metric_options}</select></label></div>"
         "<details class='run-overlay-runs'><summary>Individual runs</summary>"
@@ -1127,7 +1161,7 @@ def run_card(record, index, output=None):
     card = (
         f"<article class='run {status}'><header><h3>{html.escape(row['implementation'])}</h3>"
         f"<p>{html.escape(group_label(record))}</p>"
-        f"<p>{html.escape(row['run_id'])} · <strong>{html.escape(status_label)}</strong> · warmup {html.escape(display(row['warmup_duration']))} · {html.escape(display(row['preallocated_vus']))} preallocated VUs</p></header>{failure}"
+        f"<p>{html.escape(row['variant'])} · repetition {html.escape(display(row['repetition']))} · {html.escape(row['run_id'])} · <strong>{html.escape(status_label)}</strong> · warmup {html.escape(display(row['warmup_duration']))} · {html.escape(display(row['preallocated_vus']))} preallocated VUs</p></header>{failure}"
         f"<dl class='facts'>{facts}</dl>{history_heading}{http_detail}{diagnostic_detail}<details><summary>All recorded fields</summary><dl class='details'>{details}</dl></details></article>"
     )
     return card, history + http_figures
@@ -1188,9 +1222,12 @@ def render(records, output):
     implementations = {
         nested(record, "metadata", "implementation")
         for record in records
-        if nested(record, "metadata", "implementation") in {"go", "bun"}
+        if nested(record, "metadata", "implementation") in {"go", "bun", "rust"}
     }
-    awaiting = sorted({"go", "bun"} - implementations)
+    experiments = {nested(record, "metadata", "experiment") for record in records}
+    expected_runtimes = {"go"} if experiments == {"scheduling"} else {"go", "bun"}
+    expected_runtimes |= {"rust"} if "rust" in implementations else set()
+    awaiting = sorted(expected_runtimes - implementations)
     awaiting_text = " Awaiting " + ", ".join(awaiting) + " runs." if awaiting else ""
     has_http_capture = any(
         bool(mapping(nested(record, "metadata", "http_capture"))) for record in records

@@ -1,6 +1,6 @@
-# HTTP SQLite benchmark
+# HTTP benchmark
 
-This compares Go `net/http` `ServeMux` and Bun `Bun.serve` route tables with the same deterministic catalog, JSON contract, and filesystem SQLite workload. Both support `HEAD` on read routes, use strict single-segment product parameters, and retain their routers’ native canonical-path redirects and normalization. Give each server its own database file or volume.
+This compares Go, Bun, and Rust implementations of the same deterministic catalog and JSON contract. Go supports `net/http` `ServeMux` and Chi; Bun supports `Bun.serve` route tables and Elysia; Rust uses Axum. All support `HEAD` on read routes and strict single-segment product parameters. Native routers may retain their own canonical-path redirects and normalization. Give each SQLite server its own database file or volume.
 
 | Route | Operation |
 | --- | --- |
@@ -17,6 +17,10 @@ This compares Go `net/http` `ServeMux` and Bun `Bun.serve` route tables with the
 | `SEED_COUNT` | `5000`; 1–100000; must match an existing DB |
 | `DB_PATH` | `./data/benchmark.sqlite` relative to process cwd; containers use `/data/benchmark.sqlite` |
 | `MAX_OPEN_CONNS` | Go only: `1` (1–32); Bun uses one synchronous connection |
+| `BACKEND` | `sqlite` (default) or `memory` |
+| `ROUTER` | Go: `stdlib` (default) or `chi`; Bun: `stdlib` (default) or `elysia`; Rust: `axum` |
+| `GOMAXPROCS` | Go runtime scheduling setting; record its effective value |
+| `WORKERS` | Bun and Rust: `1` (default) or `2` |
 | `PROFILE` | `smoke`, `steady`, or `stress`; default `smoke` |
 | `WORKLOAD` | `mixed`, `list`, `detail`, `report`, `quote`, `batch`, or `events-report` |
 | `RATE`, `DURATION` | 50 requests/s and `30s` for arrival-rate profiles |
@@ -29,7 +33,8 @@ From the repository root:
 
 ```sh
 (cd benchmarks/http/go && DB_PATH=/tmp/http-go.sqlite go run .)
-PORT=8081 DB_PATH=/tmp/http-bun.sqlite bun run benchmarks/http/bun/server.js
+PORT=8081 DB_PATH=/tmp/http-bun.sqlite bun run benchmarks/http/bun/launcher.js
+(cd benchmarks/http/rust && PORT=8082 DB_PATH=/tmp/http-rust.sqlite cargo run --release)
 make test
 ```
 
@@ -58,11 +63,31 @@ make push IMAGE_PREFIX=ghcr.io/OWNER/performance TAG=http-sqlite-v1 PLATFORM=lin
 docker run --rm -e BASE_URL=http://host.docker.internal:8080 -e PROFILE=steady -e RATE=100 -e DURATION=30s ghcr.io/OWNER/performance-http-load:http-sqlite-v1
 ```
 
-The images are `ghcr.io/OWNER/performance-http-go`, `ghcr.io/OWNER/performance-http-bun`, and `ghcr.io/OWNER/performance-http-load`. In a cluster, give the load container `BASE_URL=http://SERVICE.NAMESPACE.svc.cluster.local:8080`. Mount a writable `/data` volume: Go runs as UID 65534 and Bun as UID 1000. A new volume/path resets data; an existing database rejects a different seed count.
+The images are `ghcr.io/owner/performance-http-go`, `ghcr.io/owner/performance-http-bun`, `ghcr.io/owner/performance-http-rust`, and `ghcr.io/owner/performance-http-load`. Replace `owner` and the digest placeholders below with the immutable linux/amd64 references produced by CI. In a cluster, give the load container `BASE_URL=http://SERVICE.NAMESPACE.svc.cluster.local:8080`. Mount a writable `/data` volume. Go and Rust run as UID 65534; Bun runs as UID 1000. A new volume/path resets data; an existing database rejects a different seed count.
 
 Smoke performs 20 iterations. Mixed traffic is 35% list, 25% detail, 15% catalog report, 15% quote, and 10% event batches: 90% reads and 10% writes. Steady uses a constant arrival rate. Stress holds RATE for 20 seconds, then RATE×2 and RATE×3 for `DURATION`, before a 10-second ramp-down. Console output includes p50/p95/p99, errors, dropped iterations for arrival profiles, and per-operation p95 thresholds. Size VUs high enough that dropped iterations measure generator capacity rather than application capacity.
 
-## Optional runtime diagnostics
+## Follow-up campaign
+
+The follow-up campaign is planned, not a published measurement. It uses the same contract with diagnostics disabled, a 60-second warm-up and a two-minute measurement window. At 600 RPS, run three repetitions; run every other point once. The finite matrix has 54 runs: 6 scheduling runs, 15 SQLite runs, 15 memory runs, 6 framework runs, and 12 scaling runs. `report-suite` keeps this follow-up report separate from the historical diagnostics report.
+
+Run the dry plan first. The execution command needs the cluster checkout and the three published immutable image digests; do not replace these placeholders with tags.
+
+```sh
+git clone git@github.com:jamoowen/optiplex-cluster.git ephemeral/followup-cluster
+make run-campaign CAMPAIGN_ARGS='--dry-run --stage sqlite --cluster-repo ephemeral/followup-cluster --ssh-host USER@192.0.2.10 --node-ip 192.0.2.10'
+# Replace each 64-character all-zero digest placeholder with a CI-produced digest.
+make run-campaign CAMPAIGN_ARGS='--stage sqlite --go-procs 1 --cluster-repo ephemeral/followup-cluster --ssh-host USER@192.0.2.10 --node-ip 192.0.2.10 --go-image ghcr.io/owner/performance-http-go@sha256:0000000000000000000000000000000000000000000000000000000000000000 --bun-image ghcr.io/owner/performance-http-bun@sha256:0000000000000000000000000000000000000000000000000000000000000000 --rust-image ghcr.io/owner/performance-http-rust@sha256:0000000000000000000000000000000000000000000000000000000000000000'
+make report-suite
+```
+
+Run stages one at a time; the examples use `sqlite`, and the same commands apply to `scheduling`, `memory`, `frameworks`, and `scaling`. SQLite keeps each runtime’s normal database path: Go uses `MAX_OPEN_CONNS=1`, Bun has one synchronous connection, and Rust uses one dedicated SQLite thread with queue capacity 256 and SQLite 3.50.2. The CLI default is `--go-procs 2`, but this campaign selects `--go-procs 1` for the remaining one-CPU SQLite, memory, and framework stages after the three-repetition scheduling experiment. Scaling instead sets Go `GOMAXPROCS` equal to its CPU limit (1 or 2). Go and Bun intentionally retain their existing runtime SQLite builds and versions, so SQL results are workload comparisons rather than a claim that all three use the same SQLite binary.
+
+Memory uses the same seeded immutable catalog in every runtime and scans it for filtering and reporting on each request; it does not cache responses. Events remain bounded counters keyed by `(userId, type)`, then aggregate by type for the report. The framework stage compares Go stdlib/Chi and Bun stdlib/Elysia under the same backend; Rust has Axum only.
+
+The scaling stage is read-only `WORKLOAD=list` at 600 and 3000 RPS with `SEED_COUNT=5000`, comparing CPU limits of 1 and 2. Go varies `GOMAXPROCS`; Bun varies `WORKERS=1|2`; Rust varies Tokio executor threads in one process. Bun two-worker mode is a supervising process plus two `reusePort` workers, so its container metrics include supervisor overhead. Its workers have separate immutable catalogs and no shared mutable event counters; use it only for this read-only stage.
+
+## Historical diagnostics campaign
 
 Use diagnostics only for a separate steady-profile recording with `DIAGNOSTICS=1` and the recorder diagnostics option. They are collected per process and are not benchmark ranking inputs. CPU time and database wait time answer different questions: CPU is work scheduled by the process, while database waits show time spent waiting for a pooled connection. Go allocation and GC counters help identify managed-runtime pressure, but per-process heap values do not attribute native-C SQLite allocations. The report records the actual Go `GOMAXPROCS`; it can be at least 2 even when a container CPU quota is 1.
 
@@ -108,7 +133,7 @@ Tooling is pinned in the repository: Biome 2.5.15 formats and lints JavaScript/J
 
 ## NodePort workflow
 
-Deploy to a single-node Flux cluster through the separate private cluster repository. Edit and commit its `apps/performance-http` manifests rather than using `kubectl apply` or manual scaling. Publish real images as `ghcr.io/OWNER/performance-http-go` and `ghcr.io/OWNER/performance-http-bun`, then pin their immutable linux/amd64 digests there.
+Deploy to a single-node Flux cluster through the separate private cluster repository. Edit and commit its `apps/performance-http` manifests rather than using `kubectl apply` or manual scaling. Publish real images as `ghcr.io/OWNER/performance-http-go`, `ghcr.io/OWNER/performance-http-bun`, and `ghcr.io/OWNER/performance-http-rust`, then pin their immutable linux/amd64 digests there.
 
 The separate cluster repository’s `apps/performance-http` directory pins published image digests and is included in its Flux root Kustomization when the prepared change is committed and pushed. Flux applies it only after that repository reports the pushed revision.
 
@@ -162,6 +187,6 @@ make load-bun PROFILE=steady DURATION=5m RATE=100 >results/http/bun-steady.log 2
 
 ## GitHub Actions publication
 
-The `HTTP images` workflow checks pull requests and publishes the Go and Bun linux/amd64 images on `main` or manual dispatch. It uses GitHub Actions’ ephemeral `GITHUB_TOKEN`; no personal access token is configured or required by this workflow. Each publish job writes an immutable linux/amd64 manifest `image@digest` reference to the workflow summary. Copy those digest references into the separate private Flux repository before activating either workload.
+The `HTTP images` workflow checks pull requests and publishes the Go, Bun, and Rust linux/amd64 images on `main` or manual dispatch. It uses GitHub Actions’ ephemeral `GITHUB_TOKEN`; no personal access token is configured or required by this workflow. Each publish job writes an immutable linux/amd64 manifest `image@digest` reference to the workflow summary. Copy those digest references into the separate private Flux repository before activating a workload.
 
 Repository visibility and package visibility are separate. A public source repository does not make GHCR packages public automatically. If images are made public for anonymous pulls, remove the cluster workload’s `imagePullSecrets` reference; private pulls still require the namespace-scoped pull Secret documented in that private cluster repository.
