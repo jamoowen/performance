@@ -544,8 +544,10 @@ def _wait_for_rollout(args, entry, commit, image, attempt_id):
                 for pod in pods
                 if pod.get("metadata", {}).get("labels", {}).get("app.kubernetes.io/name")
                 in {f"http-{runtime}" for runtime in RUNTIMES}
-                and not pod.get("metadata", {}).get("deletionTimestamp")
-                and pod.get("status", {}).get("phase") in {"Pending", "Running"}
+                and (
+                    pod.get("metadata", {}).get("deletionTimestamp")
+                    or pod.get("status", {}).get("phase") in {"Pending", "Running"}
+                )
             ]
             ready = selected.get("status", {}).get("readyReplicas") == 1
             selected_pods = [
@@ -554,12 +556,44 @@ def _wait_for_rollout(args, entry, commit, image, attempt_id):
                 if pod.get("metadata", {}).get("labels", {}).get("app.kubernetes.io/name")
                 == deployment
             ]
+            pod = selected_pods[0] if len(selected_pods) == 1 else {}
+            pod_container = next(
+                (
+                    item
+                    for item in pod.get("spec", {}).get("containers", [])
+                    if item.get("name") == deployment
+                ),
+                {},
+            )
+            pod_status = next(
+                (
+                    item
+                    for item in pod.get("status", {}).get("containerStatuses", [])
+                    if item.get("name") == deployment
+                ),
+                {},
+            )
+            pod_ready = (
+                not pod.get("metadata", {}).get("deletionTimestamp")
+                and pod.get("status", {}).get("phase") == "Running"
+                and pod.get("metadata", {})
+                .get("annotations", {})
+                .get("benchmark.jamoowen.dev/run-id")
+                == attempt_id
+                and pod_container.get("image") == image
+                and pod_status.get("ready") is True
+                and any(
+                    condition.get("type") == "Ready" and condition.get("status") == "True"
+                    for condition in pod.get("status", {}).get("conditions", [])
+                )
+            )
             if (
                 commit in revision
                 and _deployment_matches(selected, entry, image, args.namespace, attempt_id)
                 and others_down
                 and ready
                 and len(active) == len(selected_pods) == 1
+                and pod_ready
             ):
                 return
             last = f"revision={revision!r}, ready={ready}, others_down={others_down}"

@@ -69,7 +69,7 @@ Smoke performs 20 iterations. Mixed traffic is 35% list, 25% detail, 15% catalog
 
 ## Follow-up campaign
 
-The follow-up campaign is planned, not a published measurement. It uses the same contract with diagnostics disabled, a 60-second warm-up and a two-minute measurement window. At 600 RPS, run three repetitions; run every other point once. The finite matrix has 54 runs: 6 scheduling runs, 15 SQLite runs, 15 memory runs, 6 framework runs, and 12 scaling runs. `report-suite` keeps this follow-up report separate from the historical diagnostics report.
+The follow-up campaign uses the same contract with diagnostics disabled, a 60-second warm-up and a two-minute measurement window. The scheduling, SQLite, memory, and framework 600-RPS points run three repetitions; scaling and all other rates run once. The finite matrix has 54 runs: 6 scheduling runs, 15 SQLite runs, 15 memory runs, 6 framework runs, and 12 scaling runs. Its [follow-up findings](../../docs/reports/http/followup-findings.md) remain separate from the [historical diagnostics findings](../../docs/reports/http/findings.md); `report-suite` keeps their generated report artifacts separate.
 
 Run the dry plan first. The execution command needs the cluster checkout and the three published immutable image digests; do not replace these placeholders with tags.
 

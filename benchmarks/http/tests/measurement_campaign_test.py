@@ -348,7 +348,7 @@ class CampaignPlanTest(unittest.TestCase):
                     campaign._completed_fingerprints(args, "scheduling", (entry,)), set()
                 )
 
-    def test_rollout_wait_rejects_stale_revision_then_accepts_new_revision(self):
+    def _rollout_fixture(self):
         entry = campaign.build_plan("scheduling")[0]
         args = self.executor_args(Path("/private/tmp/cluster"))
         attempt = "attempt"
@@ -386,31 +386,111 @@ class CampaignPlanTest(unittest.TestCase):
             },
             "status": {"observedGeneration": 1, "readyReplicas": 1},
         }
-        pods = {
-            "items": [
-                {
-                    "metadata": {"labels": {"app.kubernetes.io/name": "http-go"}},
-                    "status": {"phase": "Running"},
-                }
-            ]
+        pod = {
+            "metadata": {
+                "labels": {"app.kubernetes.io/name": "http-go"},
+                "annotations": {"benchmark.jamoowen.dev/run-id": attempt},
+            },
+            "spec": {"containers": [{"name": "http-go", "image": args.go_image}]},
+            "status": {
+                "phase": "Running",
+                "containerStatuses": [{"name": "http-go", "ready": True}],
+                "conditions": [{"type": "Ready", "status": "True"}],
+            },
         }
+        return entry, args, attempt, deployment, pod
+
+    def _assert_rollout_waits_for_second_snapshot(self, first_pods, first_revision="main@commit"):
+        entry, args, attempt, deployment, pod = self._rollout_fixture()
         responses = [
-            {"status": {"lastAppliedRevision": "main@old"}},
+            {"status": {"lastAppliedRevision": first_revision}},
             deployment,
             {"items": [deployment]},
-            pods,
+            {"items": first_pods},
             {"status": {"lastAppliedRevision": "main@commit"}},
             deployment,
             {"items": [deployment]},
-            pods,
+            {"items": [pod]},
         ]
         with (
             patch.object(campaign, "_request_reconcile"),
-            patch.object(campaign, "_remote_json", side_effect=responses),
+            patch.object(campaign, "_remote_json", side_effect=responses) as remote,
             patch.object(campaign.time, "monotonic", side_effect=[0, 0, 1]),
-            patch.object(campaign.time, "sleep"),
+            patch.object(campaign.time, "sleep") as sleep,
         ):
             campaign._wait_for_rollout(args, entry, "commit", args.go_image, attempt)
+        self.assertEqual(remote.call_count, 8)
+        sleep.assert_called_once_with(2)
+
+    def test_rollout_waits_for_terminating_other_pod_then_accepts_fresh_pod(self):
+        _, _, _, _, pod = self._rollout_fixture()
+        old_terminating = {
+            "metadata": {
+                "labels": {"app.kubernetes.io/name": "http-bun"},
+                "deletionTimestamp": "now",
+            },
+            "status": {"phase": "Running"},
+        }
+        self._assert_rollout_waits_for_second_snapshot([pod, old_terminating])
+
+    def test_rollout_waits_for_old_flux_revision_then_accepts_new_revision(self):
+        _, _, _, _, pod = self._rollout_fixture()
+        self._assert_rollout_waits_for_second_snapshot([pod], first_revision="main@old")
+
+    def test_rollout_waits_for_invalid_selected_pod_then_accepts_fresh_pod(self):
+        _, _, attempt, _, pod = self._rollout_fixture()
+        cases = {
+            "terminating failed other pod": [
+                pod,
+                {
+                    "metadata": {
+                        "labels": {"app.kubernetes.io/name": "http-bun"},
+                        "deletionTimestamp": "now",
+                    },
+                    "status": {"phase": "Failed"},
+                },
+            ],
+            "selected pod pending": [
+                self._pod_with(pod, lambda value: value["status"].update(phase="Pending"))
+            ],
+            "stale selected attempt annotation": [
+                self._pod_with(
+                    pod,
+                    lambda value: value["metadata"]["annotations"].update(
+                        {"benchmark.jamoowen.dev/run-id": f"stale-{attempt}"}
+                    ),
+                )
+            ],
+            "wrong selected pod image": [
+                self._pod_with(
+                    pod,
+                    lambda value: value["spec"]["containers"][0].update(
+                        image="ghcr.io/owner/other@sha256:" + "b" * 64
+                    ),
+                )
+            ],
+            "selected container not ready": [
+                self._pod_with(
+                    pod,
+                    lambda value: value["status"]["containerStatuses"][0].update(ready=False),
+                )
+            ],
+            "selected pod Ready condition false": [
+                self._pod_with(
+                    pod,
+                    lambda value: value["status"]["conditions"][0].update(status="False"),
+                )
+            ],
+        }
+        for name, first_pods in cases.items():
+            with self.subTest(name=name):
+                self._assert_rollout_waits_for_second_snapshot(first_pods)
+
+    @staticmethod
+    def _pod_with(pod, update):
+        modified = deepcopy(pod)
+        update(modified)
+        return modified
 
     def test_push_rebases_narrow_commit_after_remote_advance_without_force(self):
         with (
