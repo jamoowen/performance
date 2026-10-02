@@ -304,6 +304,30 @@ class CampaignPlanTest(unittest.TestCase):
                     campaign._completed_fingerprints(args, "scheduling", (entry,)),
                     {entry.fingerprint},
                 )
+                pod = record["metadata"]["cluster"]["pod"]
+                pod.update(
+                    {
+                        "image": "sha256:config",
+                        "image_id": args.go_image,
+                        "requested_image": args.go_image,
+                    }
+                )
+                result.write_text(__import__("json").dumps(record))
+                self.assertEqual(
+                    campaign._completed_fingerprints(args, "scheduling", (entry,)),
+                    {entry.fingerprint},
+                )
+                pod["requested_image"] = "ghcr.io/other@sha256:" + "b" * 64
+                result.write_text(__import__("json").dumps(record))
+                self.assertEqual(
+                    campaign._completed_fingerprints(args, "scheduling", (entry,)), set()
+                )
+                pod.pop("requested_image")
+                result.write_text(__import__("json").dumps(record))
+                self.assertEqual(
+                    campaign._completed_fingerprints(args, "scheduling", (entry,)),
+                    {entry.fingerprint},
+                )
                 for key, value in (
                     ("duration", "9m"),
                     ("warmup_duration", "1s"),

@@ -154,6 +154,14 @@ def _pod_summary(pod, deployment):
         or "running" not in status.get("state", {})
     ):
         raise RuntimeError("selected pod is not ready")
+    requested = next(
+        (
+            item.get("image")
+            for item in pod.get("spec", {}).get("containers", [])
+            if item.get("name") == deployment
+        ),
+        None,
+    )
     return {
         "name": pod["metadata"]["name"],
         "uid": pod["metadata"]["uid"],
@@ -161,6 +169,7 @@ def _pod_summary(pod, deployment):
         "restart_count": status.get("restartCount", 0),
         "image": status.get("image"),
         "image_id": status.get("imageID"),
+        "requested_image": requested,
         "started_at": status["state"]["running"].get("startedAt"),
         "last_termination_reason": status.get("lastState", {}).get("terminated", {}).get("reason"),
     }

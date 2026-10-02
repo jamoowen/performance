@@ -647,7 +647,13 @@ def _completed_fingerprints(args, stage, entries):
         entry = expected.get(fingerprint)
         configuration = cluster.get("workload", {}).get("configuration", {})
         resources = cluster.get("workload", {}).get("resources", {})
-        image = cluster.get("pod", {}).get("image")
+        pod = cluster.get("pod", {})
+        image_id = str(pod.get("image_id") or "")
+        if image_id.startswith("docker-pullable://"):
+            image_id = image_id.removeprefix("docker-pullable://")
+        image = pod.get("requested_image") or (
+            image_id if "@sha256:" in image_id else pod.get("image")
+        )
         settings = metadata.get("settings", {})
         resource = result.get("resource", {})
         essential = {
