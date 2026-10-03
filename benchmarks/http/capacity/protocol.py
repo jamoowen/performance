@@ -86,7 +86,7 @@ def protocol_hash(ceiling: int = SAFETY_CEILING_RPS) -> str:
             "minimumStepMemoryBytes": 1024**3,
             "memoryPerVuMiB": 0.45,
             "minimumNofile": 8192,
-            "fdHeadroom": 512,
+            "fdBudget": "max(8192,ceil((2*vus+512)/0.8))",
             "fdStopFraction": 0.9,
             "threadStop": 2500,
             "lowMemoryStopBytes": 512 * 1024 * 1024,

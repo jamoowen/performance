@@ -1,4 +1,5 @@
 import json
+import math
 import sys
 import tempfile
 import threading
@@ -11,6 +12,7 @@ from benchmarks.http.capacity.record import (
     GIB,
     _capacity,
     _generator_limit,
+    nofile_budget,
     required_available_memory,
 )
 
@@ -31,6 +33,22 @@ class RecordTests(unittest.TestCase):
             for _ in range(5)
         ]
         self.assertEqual(_generator_limit(samples, 3 * GIB, 1000), "generator_limit_nofile")
+
+    def test_fd_budget_leaves_headroom_for_observed_3663_rps_generator(self):
+        vus = 7693
+        budget = nofile_budget(vus)
+        self.assertEqual(budget, 19873)
+        sample = {
+            "numThreads": 354,
+            "numFds": 9550,
+            "availableMemoryBytes": GIB,
+            "hostCpuPercent": [10.0],
+        }
+        self.assertIsNone(_generator_limit([sample], 3 * GIB, budget))
+        self.assertEqual(
+            _generator_limit([dict(sample, numFds=math.ceil(budget * 0.9))] * 5, 3 * GIB, budget),
+            "generator_limit_nofile",
+        )
 
     def test_final_oom_stage_is_not_ranked_as_no_overload(self):
         stage = {

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import platform
 import resource
@@ -75,6 +76,33 @@ def required_available_memory(vus: int) -> int:
     return GIB + int(vus * 0.45 * 1024 * 1024)
 
 
+def nofile_budget(vus: int) -> int:
+    """Budget k6 descriptors for sockets plus transient per-VU overhead.
+
+    The 90% emergency guard needs spare descriptors itself, so the requested
+    soft limit is deliberately larger than the expected two-per-VU footprint.
+    """
+    return max(8192, math.ceil((2 * vus + 512) / 0.8))
+
+
+def _kernel_nofile_limit(inherited_soft: int) -> int | None:
+    if platform.system() != "Darwin":
+        return None
+    try:
+        reply = subprocess.run(
+            ["sysctl", "-n", "kern.maxfilesperproc"],
+            text=True,
+            capture_output=True,
+            check=True,
+            timeout=3,
+        )
+        return int(reply.stdout.strip())
+    except (OSError, ValueError, subprocess.SubprocessError):
+        # Do not probe or raise a process limit when the OS ceiling is
+        # unavailable; inherited soft is the conservative safe ceiling.
+        return inherited_soft
+
+
 def preflight(results_dir: Path, vus: int, *, campaign_start: bool = False) -> dict[str, int]:
     try:
         import psutil
@@ -83,7 +111,8 @@ def preflight(results_dir: Path, vus: int, *, campaign_start: bool = False) -> d
     disk = shutil.disk_usage(results_dir)
     available = psutil.virtual_memory().available
     soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
-    required_fds = max(8192, vus + 512)
+    required_fds = nofile_budget(vus)
+    kernel_limit = _kernel_nofile_limit(soft)
     if disk.free < (20 * GIB if campaign_start else 2 * GIB):
         raise RuntimeError(
             "generator_limit_disk_start" if campaign_start else "generator_limit_disk"
@@ -92,34 +121,23 @@ def preflight(results_dir: Path, vus: int, *, campaign_start: bool = False) -> d
         raise RuntimeError("generator_limit_memory_step")
     if hard != resource.RLIM_INFINITY and hard < required_fds:
         raise RuntimeError("generator_limit_nofile")
+    if kernel_limit is not None and kernel_limit < required_fds:
+        raise RuntimeError("generator_limit_nofile")
     return {
         "diskFreeBytes": disk.free,
         "availableMemoryBytes": available,
         "nofileSoft": soft,
         "nofileHard": hard,
         "nofileRequired": required_fds,
+        "kernelNofileLimit": kernel_limit,
     }
 
 
 def _k6_preexec(vus: int):
     """Set only the k6 child's soft FD limit; never modify the host limit."""
     _soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
-    limit = max(8192, vus + 512)
-    kernel_limit = None
-    if platform.system() == "Darwin":
-        try:
-            reply = subprocess.run(
-                ["sysctl", "-n", "kern.maxfilesperproc"],
-                text=True,
-                capture_output=True,
-                check=True,
-                timeout=3,
-            )
-            kernel_limit = int(reply.stdout.strip())
-        except (OSError, ValueError, subprocess.SubprocessError):
-            # Do not probe or raise a process limit when the OS ceiling is
-            # unavailable; inherited soft is the conservative safe ceiling.
-            kernel_limit = _soft
+    limit = nofile_budget(vus)
+    kernel_limit = _kernel_nofile_limit(_soft)
     if kernel_limit is not None and limit > kernel_limit:
         raise RuntimeError("generator_limit_nofile")
     if hard != resource.RLIM_INFINITY and hard < limit:

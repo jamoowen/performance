@@ -35,7 +35,9 @@ not begin after that sustained overload or an OOM/restart. A client p95 above
 own.
 
 Before a step, the generator requires at least `1 GiB + VUs × 0.45 MiB` free
-memory and sufficient file descriptors. While it runs, it stops on the stated
+memory and a file-descriptor budget of
+`max(8,192, ceil((2 × VUs + 512) / 0.8))`. This reserves headroom for sockets
+and temporary descriptors before the 90% guard. While it runs, it stops on the stated
 guard conditions: at least 2,500 threads, less than 512 MiB available memory for
 five seconds, at least 95% host CPU for five seconds, near its file-descriptor
 limit, or less than 2 GiB free disk. These stops are generator limits and make a
