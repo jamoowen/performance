@@ -380,6 +380,3 @@ def create_app() -> FastAPI:
             return error_response(error)
 
     return app
-
-
-app = create_app()

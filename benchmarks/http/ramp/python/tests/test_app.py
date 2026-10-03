@@ -1,8 +1,5 @@
-import os
 import tempfile
 import unittest
-
-os.environ["SQLITE_PATH"] = "/private/tmp/performance-ramp-python-test.sqlite"
 
 from app import RequestError, Service, Store, parse_delta, parse_identifier
 
