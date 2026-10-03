@@ -26,8 +26,20 @@ as continuous traffic. The initial targets are 300, 600, 900, 1200, and 1500 RPS
 Later targets are the previous target multiplied by 1.25, rounded up, up to a
 20,000 RPS safety ceiling. This ceiling is a guard, not a claimed capacity.
 
-Each step uses `ceil(target RPS × 2.1)` preallocated and maximum VUs. Starting a
-new process for each step releases generator resources between tiers. A stage is
+Each measured step uses a fixed 1,024 preallocated and maximum VUs; warmup keeps
+its separate 256 VUs. This caps concurrent in-flight requests and avoids a
+rate-proportional connection-initialization footprint on the generator. At a full
+1,024-VU pool, dropped arrivals are unissued scheduled arrivals, not HTTP errors
+and not automatic evidence of an API CPU ceiling. A fixed
+pool follows k6's guidance that arrival-rate VUs depend on iteration
+duration, rate, and variance, and that runtime VU growth can consume generator
+CPU and memory: [arrival-rate VU allocation](https://grafana.com/docs/k6/latest/using-k6/scenarios/concepts/arrival-rate-vu-allocation/).
+The fixed pool is an explicit bounded-concurrency qualification above roughly
+4,096 RPS (1,024 / 4,096 seconds per request); its drop boundary is a tested
+system boundary, not a universal API capacity claim.
+Pod telemetry runs for up to 3,600 seconds and is stopped explicitly when the
+attempt ends, so it remains available for a legitimate higher-rate search.
+A new process for each step releases generator resources between tiers. A stage is
 overloaded when its stable-window error/drop rate reaches 1% and that condition
 also persists for four consecutive five-second stable buckets. The next step does
 not begin after that sustained overload or an OOM/restart. A client p95 above

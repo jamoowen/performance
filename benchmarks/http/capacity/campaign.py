@@ -15,7 +15,7 @@ from typing import Any
 from benchmarks.http.ramp.measure import campaign as ramp
 
 from . import record
-from .protocol import SAFETY_CEILING_RPS, initial_steps, protocol_hash
+from .protocol import MEASURED_VUS, SAFETY_CEILING_RPS, initial_steps, protocol_hash
 
 VARIANTS = (
     ("go", "nethttp"),
@@ -113,6 +113,7 @@ def plan(args: argparse.Namespace, images: dict[str, str] | None = None) -> dict
     return {
         "mode": "execute" if args.execute else "dry-run",
         "warmup": {"rps": 100, "seconds": 30, "vus": 256},
+        "measuredVus": MEASURED_VUS,
         "initialSteps": [step.as_k6_stage() for step in initial_steps()],
         "safetyCeilingRps": args.safety_ceiling,
         "loadHash": record.load_hash(),
@@ -183,6 +184,9 @@ def _restore(args: argparse.Namespace, repo: Path, baseline: dict[Path, bytes]) 
 
 
 def _validate_completed(args: argparse.Namespace, row: dict[str, Any]) -> None:
+    marker = args.results_dir / row["attemptId"] / "owned-process-cleanup-failure.json"
+    if marker.exists():
+        raise RuntimeError("owned_process_cleanup_failure")
     try:
         value = json.loads(Path(row["resultPath"]).read_text())
     except (KeyError, OSError, json.JSONDecodeError) as error:
@@ -222,6 +226,11 @@ def execute(args: argparse.Namespace) -> dict[str, Any]:
             raise RuntimeError(
                 "resume identity does not match prior capacity image/source/load/protocol"
             )
+        marker = (
+            args.results_dir / previous.get("attemptId", "") / "owned-process-cleanup-failure.json"
+        )
+        if marker.exists():
+            raise RuntimeError("owned_process_cleanup_failure")
         if previous.get("status") == "complete":
             _validate_completed(args, previous)
     baseline = ramp.load_persisted_baseline(args) if args.resume else ramp.snapshot(repo)
@@ -282,6 +291,11 @@ def execute(args: argparse.Namespace) -> dict[str, Any]:
                 _record_command(args, variant, image, attempt_id, revision), check=False
             ).returncode
             row["recorderReturncode"] = recorder_returncode
+            marker = args.results_dir / attempt_id / "owned-process-cleanup-failure.json"
+            if marker.exists():
+                row["status"] = "failed"
+                _write(_journal_path(args), journal)
+                raise RuntimeError("owned_process_cleanup_failure")
             # An explicitly invalid result is complete evidence, whereas a
             # missing result leaves the attempt failed and resumable.
             row["status"] = "complete" if Path(row["resultPath"]).is_file() else "failed"

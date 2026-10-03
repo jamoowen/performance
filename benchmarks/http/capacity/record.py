@@ -40,6 +40,8 @@ from benchmarks.http.ramp.measure.record import (
 from benchmarks.http.ramp.measure.schedule import Stage
 
 from .protocol import (
+    COLLECTOR_DURATION_SECONDS,
+    MEASURED_VUS,
     SAFETY_CEILING_RPS,
     STABLE_SECONDS,
     TRANSITION_SECONDS,
@@ -213,6 +215,43 @@ def _generator_limit(samples: list[dict[str, Any]], disk_free: int, fd_limit: in
     return "generator_limit_disk" if disk_free < 2 * GIB else None
 
 
+def _stop_owned_k6(process: Any) -> bool:
+    """Stop only this recorder's child and prove it is gone before continuing."""
+    if process.poll() is not None:
+        return True
+    for signal_value, timeout in ((signal.SIGINT, 8), (signal.SIGTERM, 5), (signal.SIGKILL, 30)):
+        try:
+            process.send_signal(signal_value)
+        except ProcessLookupError:
+            return True
+        try:
+            process.wait(timeout=timeout)
+            return True
+        except subprocess.TimeoutExpired:
+            continue
+    return process.poll() is not None
+
+
+def _write_cleanup_failure(directory: Path, mode: str, reason: str | None = None) -> None:
+    """Durably identify the one condition that must halt the whole campaign."""
+    value: dict[str, Any] = {"code": "owned_process_cleanup_failure", "mode": mode}
+    if reason:
+        value["reason"] = reason
+    _write_json(directory / "owned-process-cleanup-failure.json", value)
+
+
+def _write_recorder_diagnostic(directory: Path, mode: str, error: BaseException) -> None:
+    """Keep a safe, private exception classification beside the raw k6 logs."""
+    try:
+        _write_json(
+            directory / "recorder-diagnostic.json",
+            {"code": "run_k6_exception", "mode": mode, "exceptionClass": type(error).__name__},
+        )
+    except OSError:
+        # Diagnostics must never prevent owned-child cleanup.
+        pass
+
+
 def run_k6(a: Any, mode: str, step: Step | None, directory: Path) -> dict[str, Any]:
     name = "warmup" if mode == "warmup" else f"step-{step.target_rps}"
     output, summary, log = (
@@ -239,15 +278,13 @@ def run_k6(a: Any, mode: str, step: Step | None, directory: Path) -> dict[str, A
         start_ns = time.time_ns()
         try:
             collector = GeneratorCollector(process.pid, interface, log_dir=generator_dir).start()
-        except BaseException:
-            process.terminate()
-            try:
-                process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait(timeout=5)
+        except BaseException as error:
+            if not _stop_owned_k6(process):
+                _write_cleanup_failure(directory, mode, "collector_initialization")
+            _write_recorder_diagnostic(directory, mode, error)
             raise
         stopped = None
+        cleanup_attempted = False
         try:
             while process.poll() is None:
                 try:
@@ -256,25 +293,17 @@ def run_k6(a: Any, mode: str, step: Step | None, directory: Path) -> dict[str, A
                     samples = getattr(collector, "samples", [])
                     stopped = _generator_limit(samples, shutil.disk_usage(directory).free, fd_limit)
                     if stopped:
-                        process.send_signal(signal.SIGINT)
-                        try:
-                            process.wait(timeout=8)
-                        except subprocess.TimeoutExpired:
-                            process.terminate()
-                            try:
-                                process.wait(timeout=5)
-                            except subprocess.TimeoutExpired:
-                                process.kill()
-                                process.wait(timeout=5)
+                        cleanup_attempted = True
+                        if not _stop_owned_k6(process):
+                            _write_cleanup_failure(directory, mode, stopped)
+                            raise RuntimeError("owned_process_cleanup_failure") from None
                         break
-        except BaseException:
-            if process.poll() is None:
-                process.terminate()
-                try:
-                    process.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    process.kill()
-                    process.wait(timeout=5)
+        except BaseException as error:
+            if process.poll() is None and not cleanup_attempted:
+                cleanup_attempted = True
+                if not _stop_owned_k6(process):
+                    _write_cleanup_failure(directory, mode)
+            _write_recorder_diagnostic(directory, mode, error)
             raise
         finally:
             collector.stop()
@@ -361,7 +390,17 @@ def run(a: Any) -> dict[str, Any]:
     """Run warmup then bounded steps.  ``a`` is argparse-compatible for tests."""
     out = a.results_dir / a.attempt_id
     out.mkdir(parents=True, exist_ok=False, mode=0o700)
-    _write_json(out / "manifest.json", vars(a))
+    _write_json(
+        out / "manifest.json",
+        {
+            **vars(a),
+            "protocol": {
+                "measuredVus": MEASURED_VUS,
+                "warmupVus": WARMUP_VUS,
+                "collectorDurationSeconds": COLLECTOR_DURATION_SECONDS,
+            },
+        },
+    )
     before = request(a.base_url, "/benchmark/integrity")
     if (
         before.get("rows") != 5000
@@ -380,6 +419,10 @@ def run(a: Any) -> dict[str, Any]:
             "loadHash": load_hash(),
             "protocolHash": protocol_hash(a.safety_ceiling),
             "generator": {"k6Version": _k6_version(a.k6)},
+            "measuredVus": MEASURED_VUS,
+            "warmupVus": WARMUP_VUS,
+            "maxVus": MEASURED_VUS,
+            "collectorDurationSeconds": COLLECTOR_DURATION_SECONDS,
         }
     )
     checkpoint: dict[str, Any] = {"attemptId": a.attempt_id, "status": "in_progress", "stages": []}
@@ -397,7 +440,7 @@ def run(a: Any) -> dict[str, Any]:
         "http-ramp",
         identity["uid"],
         identity["containerId"],
-        2100,
+        COLLECTOR_DURATION_SECONDS,
         log_dir=out,
     ).start()
     if not remote._metadata_event.wait(10) or remote.errors:
@@ -441,6 +484,7 @@ def run(a: Any) -> dict[str, Any]:
                 "kind": "step",
                 "stageIndex": index,
                 "targetRps": step.target_rps,
+                "vus": step.vus,
                 "status": "running",
             }
             _write_json(out / "checkpoint.json", checkpoint)
@@ -467,6 +511,7 @@ def run(a: Any) -> dict[str, Any]:
             entry = {
                 "stageIndex": index,
                 "targetRps": step.target_rps,
+                "vus": step.vus,
                 "transitionSeconds": step.transition_seconds,
                 "settlingSeconds": step.settling_seconds,
                 "stableSeconds": step.stable_seconds,
@@ -683,6 +728,7 @@ def run(a: Any) -> dict[str, Any]:
             "stages": [
                 {
                     "targetRps": item["targetRps"],
+                    "vus": item["vus"],
                     "transitionSeconds": item["transitionSeconds"],
                     "stableSeconds": item["stableSeconds"],
                     "settlingSeconds": item["settlingSeconds"],
@@ -770,6 +816,10 @@ def main(argv: list[str] | None = None) -> int:
                         "harnessSourceRevision": values.harness_source_revision,
                         "loadHash": load_hash(),
                         "protocolHash": protocol_hash(values.safety_ceiling),
+                        "measuredVus": MEASURED_VUS,
+                        "warmupVus": WARMUP_VUS,
+                        "maxVus": MEASURED_VUS,
+                        "collectorDurationSeconds": COLLECTOR_DURATION_SECONDS,
                     },
                     "validity": {"status": "invalid", "reasons": ["recorder_failure"]},
                     "capacity": {
@@ -801,6 +851,7 @@ def main(argv: list[str] | None = None) -> int:
                         "stages": [
                             {
                                 "targetRps": stage.get("targetRps"),
+                                "vus": stage.get("vus"),
                                 "transitionSeconds": stage.get("transitionSeconds"),
                                 "settlingSeconds": stage.get("settlingSeconds"),
                                 "stableSeconds": stage.get("stableSeconds"),

@@ -29,6 +29,10 @@ def run(runtime="go", framework="nethttp", attempt="go-nethttp"):
             "driver": "sqlite",
             "sqliteVersion": "3",
             "workers": 1,
+            "measuredVus": 1024,
+            "maxVus": 1024,
+            "warmupVus": 256,
+            "collectorDurationSeconds": 3600,
         },
         "validity": {"status": "valid", "reasons": []},
         "capacity": {
@@ -192,6 +196,61 @@ class CapacityReportTests(unittest.TestCase):
         data = sanitize({"experiment": "sqlite-capacity-v1", "runs": [source]})
         self.assertEqual(data["runs"][0]["metadata"]["driver"], "local_artifact")
         self.assertNotIn("ssh", data["runs"][0]["generator"])
+
+    def test_allowlists_fixed_vu_and_collector_metadata_as_safe_integers(self):
+        source = run()
+        source["metadata"].update(
+            {
+                "measuredVus": 1024,
+                "maxVus": 1024,
+                "warmupVus": 256,
+                "collectorDurationSeconds": 3600,
+                "privateHost": "192.168.1.122",
+                "badVus": 3.5,
+            }
+        )
+        data = sanitize({"experiment": "sqlite-capacity-v1", "runs": [source]})
+        metadata = data["runs"][0]["metadata"]
+        self.assertEqual(
+            {
+                key: metadata[key]
+                for key in ("measuredVus", "maxVus", "warmupVus", "collectorDurationSeconds")
+            },
+            {
+                "measuredVus": 1024,
+                "maxVus": 1024,
+                "warmupVus": 256,
+                "collectorDurationSeconds": 3600,
+            },
+        )
+        self.assertNotIn("privateHost", metadata)
+        self.assertNotIn("badVus", metadata)
+
+    def test_rejects_non_integer_or_nonfinite_allowlisted_vu_metadata(self):
+        source = run()
+        source["metadata"].update(
+            {
+                "measuredVus": 1.5,
+                "maxVus": True,
+                "warmupVus": "192.168.1.122",
+                "collectorDurationSeconds": float("inf"),
+            }
+        )
+        metadata = sanitize({"experiment": "sqlite-capacity-v1", "runs": [source]})["runs"][0][
+            "metadata"
+        ]
+        self.assertEqual(
+            {
+                key: metadata[key]
+                for key in ("measuredVus", "maxVus", "warmupVus", "collectorDurationSeconds")
+            },
+            {
+                "measuredVus": None,
+                "maxVus": None,
+                "warmupVus": None,
+                "collectorDurationSeconds": None,
+            },
+        )
 
     def test_aggregate_requires_the_excluded_matrix(self):
         with tempfile.TemporaryDirectory() as directory:

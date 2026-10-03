@@ -1,5 +1,7 @@
 import json
 import math
+import signal
+import subprocess
 import sys
 import tempfile
 import threading
@@ -8,16 +10,138 @@ from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from unittest.mock import patch
 
+from benchmarks.http.capacity.protocol import Step
 from benchmarks.http.capacity.record import (
     GIB,
     _capacity,
     _generator_limit,
+    _stop_owned_k6,
     nofile_budget,
     required_available_memory,
+    run_k6,
 )
 
 
 class RecordTests(unittest.TestCase):
+    def test_owned_k6_cleanup_signals_then_waits_and_reaps_after_kill(self):
+        class Process:
+            def __init__(self):
+                self.signals = []
+                self.waits = []
+                self.gone = False
+
+            def poll(self):
+                return 0 if self.gone else None
+
+            def send_signal(self, value):
+                self.signals.append(value)
+
+            def wait(self, timeout):
+                self.waits.append(timeout)
+                if len(self.waits) < 3:
+                    raise subprocess.TimeoutExpired("k6", timeout)
+                self.gone = True
+                return 0
+
+        process = Process()
+        self.assertTrue(_stop_owned_k6(process))
+        self.assertEqual(process.signals, [signal.SIGINT, signal.SIGTERM, signal.SIGKILL])
+        self.assertEqual(process.waits, [8, 5, 30])
+
+    def test_run_k6_guard_preserves_partial_capture_after_kill_reaps_child(self):
+        class Process:
+            def __init__(self):
+                self.pid = 42
+                self.returncode = None
+                self.signals = []
+                self.waits = []
+
+            def poll(self):
+                return self.returncode
+
+            def send_signal(self, value):
+                self.signals.append(value)
+
+            def wait(self, timeout):
+                self.waits.append(timeout)
+                if timeout in (1, 8, 5):
+                    raise subprocess.TimeoutExpired("k6", timeout)
+                self.returncode = 0
+                return 0
+
+        class Collector:
+            def __init__(self, *_args, **_kwargs):
+                self.samples = [{"numThreads": 2500}]
+
+            def start(self):
+                return self
+
+            def stop(self):
+                pass
+
+            def join(self, timeout=15):
+                return {"coverage": 1, "samples": self.samples, "errors": []}
+
+        with tempfile.TemporaryDirectory() as directory:
+            process = Process()
+            with (
+                patch(
+                    "benchmarks.http.capacity.record._k6_preexec", return_value=(None, 8192, 92160)
+                ),
+                patch("benchmarks.http.capacity.record.route_interface", return_value="en0"),
+                patch("benchmarks.http.capacity.record.subprocess.Popen", return_value=process),
+                patch("benchmarks.http.capacity.record.GeneratorCollector", Collector),
+                patch(
+                    "benchmarks.http.capacity.record.shutil.disk_usage",
+                    return_value=SimpleNamespace(free=3 * GIB),
+                ),
+            ):
+                capture = run_k6(self._args(directory), "step", Step(300), Path(directory))
+        self.assertEqual(capture["generatorLimit"], "generator_limit_threads")
+        self.assertEqual(process.signals, [signal.SIGINT, signal.SIGTERM, signal.SIGKILL])
+        self.assertEqual(process.waits, [1, 8, 5, 30])
+        self.assertEqual(process.returncode, 0)
+
+    def test_collector_start_diagnostic_io_error_does_not_prevent_child_cleanup(self):
+        class Process:
+            def __init__(self):
+                self.pid = 42
+                self.returncode = None
+                self.signals = []
+
+            def poll(self):
+                return self.returncode
+
+            def send_signal(self, value):
+                self.signals.append(value)
+
+            def wait(self, timeout):
+                self.returncode = 0
+                return 0
+
+        class FailingCollector:
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+            def start(self):
+                raise RuntimeError("collector failed")
+
+        with tempfile.TemporaryDirectory() as directory:
+            process = Process()
+            with (
+                patch(
+                    "benchmarks.http.capacity.record._k6_preexec", return_value=(None, 8192, 92160)
+                ),
+                patch("benchmarks.http.capacity.record.route_interface", return_value="en0"),
+                patch("benchmarks.http.capacity.record.subprocess.Popen", return_value=process),
+                patch("benchmarks.http.capacity.record.GeneratorCollector", FailingCollector),
+                patch("benchmarks.http.capacity.record._write_json", side_effect=OSError("disk")),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "collector failed"):
+                    run_k6(self._args(directory), "step", Step(300), Path(directory))
+        self.assertEqual(process.signals, [signal.SIGINT])
+        self.assertEqual(process.returncode, 0)
+
     def test_vu_memory_guard(self):
         self.assertEqual(required_available_memory(0), GIB)
         self.assertGreater(required_available_memory(3150), GIB)
@@ -266,6 +390,10 @@ class RecordTests(unittest.TestCase):
         self.assertEqual(saved["validity"]["status"], "valid")
         self.assertEqual(checkpoint["status"], "complete")
         self.assertTrue(collector.stopped)
+        self.assertEqual(saved["metadata"]["measuredVus"], 1024)
+        self.assertEqual(saved["metadata"]["warmupVus"], 256)
+        self.assertEqual(saved["stages"][0]["vus"], 1024)
+        self.assertEqual(saved["schedule"]["stages"][0]["vus"], 1024)
 
     def test_recorder_keeps_oom_as_valid_workload_boundary(self):
         result, _saved, _checkpoint, _calls, _collector = self._run(

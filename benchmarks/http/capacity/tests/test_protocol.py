@@ -11,9 +11,9 @@ from benchmarks.http.capacity.protocol import (
 class ProtocolTests(unittest.TestCase):
     def test_initial_steps_and_vus(self):
         self.assertEqual([step.target_rps for step in initial_steps()], [300, 600, 900, 1200, 1500])
-        self.assertEqual(Step(300).vus, 630)
-        self.assertEqual(Step(2930).vus, 6153)
-        self.assertEqual(Step(3663).vus, 7693)
+        self.assertEqual(Step(300).vus, 1024)
+        self.assertEqual(Step(2930).vus, 1024)
+        self.assertEqual(Step(20_000).vus, 1024)
 
     def test_next_target_rounds_up_and_honors_ceiling(self):
         self.assertEqual(next_target(1500), 1875)

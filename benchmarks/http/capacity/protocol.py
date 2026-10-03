@@ -15,6 +15,8 @@ from typing import Any
 WARMUP_RPS = 100
 WARMUP_SECONDS = 30
 WARMUP_VUS = 256
+MEASURED_VUS = 1024
+COLLECTOR_DURATION_SECONDS = 3600
 TRANSITION_SECONDS = 15
 STABLE_SECONDS = 75
 SAFETY_CEILING_RPS = 20_000
@@ -30,7 +32,7 @@ class Step:
 
     @property
     def vus(self) -> int:
-        return math.ceil(self.target_rps * 2.1)
+        return MEASURED_VUS
 
     def as_k6_stage(self) -> dict[str, int]:
         return {
@@ -67,11 +69,12 @@ def step_hash(step: Step) -> str:
 def protocol_hash(ceiling: int = SAFETY_CEILING_RPS) -> str:
     value: dict[str, Any] = {
         "warmup": {"rps": WARMUP_RPS, "seconds": WARMUP_SECONDS, "vus": WARMUP_VUS},
+        "measuredVus": MEASURED_VUS,
+        "collectorDurationSeconds": COLLECTOR_DURATION_SECONDS,
         "initialTargets": list(INITIAL_TARGETS),
         "transitionSeconds": TRANSITION_SECONDS,
         "stableSeconds": STABLE_SECONDS,
         "ceilingRps": ceiling,
-        "vusMultiplier": 2.1,
         "httpTimeoutSeconds": 2,
         "gracefulStopSeconds": 3,
         "overload": {

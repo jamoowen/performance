@@ -111,6 +111,14 @@ def _num(value):
     )
 
 
+def _integer(value):
+    return (
+        value
+        if isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= 1_000_000
+        else None
+    )
+
+
 def _text(value):
     return (
         value
@@ -175,6 +183,8 @@ def _clean_metadata(source):
         for key in simple
         if key in source
     }
+    for key in ("measuredVus", "maxVus", "warmupVus", "collectorDurationSeconds"):
+        result[key] = _integer(source.get(key))
     result["pragmas"] = {
         key: _text(value) if isinstance(value, str) else _num(value)
         for key, value in source.get("pragmas", {}).items()
