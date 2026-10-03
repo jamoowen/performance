@@ -1,0 +1,17 @@
+[package]
+name = "performance-http-ramp-rust"
+version = "0.1.0"
+edition = "2024"
+build = "build.rs"
+
+[dependencies]
+actix-web = "=4.15.0"
+axum = "=0.8.9"
+rocket = { version = "=0.5.1", features = ["json"] }
+rusqlite = { version = "=0.40.2", features = ["bundled", "cache"] }
+serde = { version = "=1.0.228", features = ["derive"] }
+serde_json = "=1.0.145"
+tokio = { version = "=1.53.2", features = ["macros", "rt-multi-thread", "sync", "net"] }
+
+[lints.rust]
+unsafe_code = "forbid"

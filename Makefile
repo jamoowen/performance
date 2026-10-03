@@ -1,6 +1,7 @@
 IMAGE_PREFIX ?= ghcr.io/owner/performance
 TAG ?= latest
 PLATFORM ?= linux/amd64
+DOCKER_NATIVE_PLATFORM ?= linux/arm64
 K6 ?= k6
 NODE_IP ?=
 GO_NODE_PORT ?= 30080
@@ -26,7 +27,7 @@ PUBLISH_DIR ?= docs/reports/http
 
 -include .local.mk
 
-.PHONY: tools format format-check lint check test build build-go build-bun build-rust build-load push load load-go load-bun record-go record-bun record-rust compare publish-report report-suite run-campaign
+.PHONY: tools format format-check lint check test build build-go build-bun build-rust build-load push load load-go load-bun record-go record-bun record-rust compare publish-report report-suite run-campaign ramp-tools ramp-format-check ramp-check ramp-contracts ramp-build ramp-campaign ramp-report
 
 GOLANGCI_LINT := GOCACHE=$(CURDIR)/.cache/go-build GOMODCACHE=$(CURDIR)/.cache/go-mod GOLANGCI_LINT_CACHE=$(CURDIR)/.cache/golangci-lint $(CURDIR)/.tools/bin/golangci-lint
 RUFF := UV_CACHE_DIR=$(CURDIR)/.cache/uv UV_TOOL_DIR=$(CURDIR)/.cache/uv-tools uvx --from ruff==0.16.4 ruff
@@ -151,3 +152,57 @@ report-suite:
 
 run-campaign:
 	UV_CACHE_DIR=$(CURDIR)/.cache/uv PYTHONPATH=benchmarks/http uv run --no-project --with PyYAML==6.0.3 python3 -m measure.campaign $(CAMPAIGN_ARGS)
+
+RAMP_ROOT := benchmarks/http/ramp
+RAMP_RUNTIMES ?= go node bun rust python elixir
+RAMP_IMAGE_PREFIX ?= local/performance-http-ramp
+RAMP_TAG ?= dev
+RAMP_RUNTIME ?=
+RAMP_IMAGE ?=
+RAMP_INPUT ?=
+RAMP_RESULTS_DIR ?=
+RAMP_OUTPUT_DIR ?= docs/reports/http/sqlite-ramp
+RAMP_CAMPAIGN_ARGS ?=
+
+ramp-tools:
+	bun install --frozen-lockfile
+	cd $(RAMP_ROOT)/node && npm ci
+	cd $(RAMP_ROOT)/bun && bun install --frozen-lockfile
+	cd $(RAMP_ROOT)/python && uv sync --frozen --no-dev
+	UV_CACHE_DIR=$(CURDIR)/.cache/uv uv run --no-project --with PyYAML==6.0.3 --with psutil==7.2.2 python3 -c 'import psutil, yaml'
+
+ramp-format-check:
+	@unformatted="$$(gofmt -l $(RAMP_ROOT)/go/*.go)" && { test -z "$$unformatted" || { printf '%s\n' "$$unformatted"; exit 1; }; }
+	cd $(RAMP_ROOT)/rust && cargo +1.93.0 fmt --check
+	./node_modules/.bin/biome check --formatter-enabled=true --linter-enabled=false --assist-enabled=false $(RAMP_ROOT) biome.json
+	$(RUFF) format --check $(RAMP_ROOT)/python $(RAMP_ROOT)/measure $(RAMP_ROOT)/tests $(RAMP_ROOT)/report
+	docker run --rm --platform $(DOCKER_NATIVE_PLATFORM) -v "$(CURDIR)/$(RAMP_ROOT)/elixir:/app" -w /app hexpm/elixir:1.20.4-erlang-28.5.0.7-debian-bookworm-20260918-slim /bin/sh -lc 'MIX_ENV=dev mix format --check-formatted'
+
+ramp-check: ramp-format-check
+	cd $(RAMP_ROOT)/go && CGO_ENABLED=0 go vet ./... && CGO_ENABLED=0 go test ./... && $(GOLANGCI_LINT) run --config ../../../../.golangci.yml ./...
+	cd $(RAMP_ROOT)/rust && cargo +1.93.0 clippy --all-targets --locked -- -D warnings && cargo +1.93.0 test --locked
+	cd $(RAMP_ROOT)/node && npm run check
+	cd $(RAMP_ROOT)/bun && bun run check
+	cd $(RAMP_ROOT)/python && .venv/bin/python -m unittest discover -s tests -v
+	$(RUFF) check $(RAMP_ROOT)/python $(RAMP_ROOT)/measure $(RAMP_ROOT)/tests $(RAMP_ROOT)/report
+	UV_CACHE_DIR=$(CURDIR)/.cache/uv PYTHONPATH=$(RAMP_ROOT) uv run --no-project --with PyYAML==6.0.3 --with psutil==7.2.2 python3 -m unittest discover -s $(RAMP_ROOT)/tests -p 'test_*.py'
+	PYTHONPATH=$(RAMP_ROOT) python3 -m unittest discover -s $(RAMP_ROOT)/report/tests -p 'test_*.py'
+	docker run --rm --platform $(DOCKER_NATIVE_PLATFORM) -v "$(CURDIR)/$(RAMP_ROOT)/elixir:/app" -w /app hexpm/elixir:1.20.4-erlang-28.5.0.7-debian-bookworm-20260918-slim /bin/sh -lc 'mix local.hex --force && mix local.rebar --force && MIX_ENV=dev mix deps.get && MIX_ENV=dev mix credo --strict'
+
+ramp-contracts:
+	@test -n "$(RAMP_RUNTIME)" || { echo "RAMP_RUNTIME is required"; exit 2; }
+	@test -n "$(RAMP_IMAGE)" || { echo "RAMP_IMAGE is required"; exit 2; }
+	python3 $(RAMP_ROOT)/tests/matrix.py --runtime "$(RAMP_RUNTIME)" --image "$(RAMP_IMAGE)"
+
+ramp-build:
+	@set -e; for runtime in $(RAMP_RUNTIMES); do \
+		docker buildx build --load --platform $(PLATFORM) -f $(RAMP_ROOT)/$$runtime/Dockerfile -t $(RAMP_IMAGE_PREFIX)-$$runtime:$(RAMP_TAG) .; \
+	done
+
+ramp-campaign:
+	UV_CACHE_DIR=$(CURDIR)/.cache/uv PYTHONPATH=$(CURDIR) uv run --no-project --with PyYAML==6.0.3 --with psutil==7.2.2 python3 -m benchmarks.http.ramp.measure.campaign $(RAMP_CAMPAIGN_ARGS)
+
+ramp-report:
+	@test -n "$(RAMP_INPUT)$(RAMP_RESULTS_DIR)" || { echo "RAMP_INPUT or RAMP_RESULTS_DIR is required"; exit 2; }
+	@test -z "$(RAMP_INPUT)" -o -z "$(RAMP_RESULTS_DIR)" || { echo "use only one of RAMP_INPUT or RAMP_RESULTS_DIR"; exit 2; }
+	UV_CACHE_DIR=$(CURDIR)/.cache/uv PYTHONPATH=$(RAMP_ROOT) uv run --no-project --with plotly==7.1.0 python3 -m report.report $(if $(RAMP_RESULTS_DIR),--results-dir "$(RAMP_RESULTS_DIR)","$(RAMP_INPUT)") --output-dir "$(RAMP_OUTPUT_DIR)"

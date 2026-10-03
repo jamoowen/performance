@@ -1,0 +1,13 @@
+{
+  "name": "performance-http-ramp-bun",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "bun run server.js",
+    "check": "bunx biome check --no-errors-on-unmatched server.js storage.js"
+  },
+  "dependencies": {
+    "elysia": "1.4.30",
+    "hono": "4.13.12"
+  }
+}

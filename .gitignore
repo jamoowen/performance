@@ -4,9 +4,16 @@
 **/__pycache__/
 **/*.pyc
 **/node_modules/
+**/.venv/
+**/deps/
+**/_build/
+**/dist/
 **/.cache/
 **/data/
 **/http-go-test
+**/http-ramp-go-contract
+**/performance-http-ramp-rust
+**/erl_crash.dump
 **/target/
 .tools/
 .ruff_cache/

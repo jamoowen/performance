@@ -1,0 +1,8 @@
+{
+  "root": false,
+  "extends": ["../../../../biome.json"],
+  "javascript": {
+    "globals": ["Bun", "__ENV"],
+    "parser": { "unsafeParameterDecoratorsEnabled": true }
+  }
+}

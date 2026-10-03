@@ -1,0 +1,168 @@
+name: SQLite ramp images
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/http-ramp-images.yml
+      - Makefile
+      - .dockerignore
+      - .gitignore
+      - biome.json
+      - ruff.toml
+      - .golangci.yml
+      - benchmarks/http/ramp/**
+  pull_request:
+    paths:
+      - .github/workflows/http-ramp-images.yml
+      - Makefile
+      - .dockerignore
+      - .gitignore
+      - biome.json
+      - ruff.toml
+      - .golangci.yml
+      - benchmarks/http/ramp/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version: "1.27.1"
+          cache-dependency-path: benchmarks/http/ramp/go/go.sum
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version: "1.4.2"
+      - uses: actions/setup-node@8f152de45cc393bb48ce5d89d3b731f54556e65
+        with:
+          node-version: "24.21.0"
+      - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d
+        with:
+          toolchain: "1.93.0"
+          components: rustfmt, clippy
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.14"
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7
+        with:
+          cache-dependency-glob: |
+            benchmarks/http/ramp/python/uv.lock
+            ruff.toml
+      - name: Install JavaScript dependencies
+        run: |
+          bun install --frozen-lockfile
+          npm ci --prefix benchmarks/http/ramp/node
+          cd benchmarks/http/ramp/bun && bun install --frozen-lockfile
+      - name: Go checks without cgo
+        working-directory: benchmarks/http/ramp/go
+        run: |
+          test -z "$(gofmt -l .)"
+          CGO_ENABLED=0 go vet ./...
+          CGO_ENABLED=0 go test ./...
+          GOBIN="$GITHUB_WORKSPACE/.tools/bin" go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0
+          CGO_ENABLED=0 "$GITHUB_WORKSPACE/.tools/bin/golangci-lint" run --config ../../../../.golangci.yml ./...
+      - name: Node and Bun checks
+        run: |
+          npm run check --prefix benchmarks/http/ramp/node
+          (cd benchmarks/http/ramp/bun && bun run check)
+          ./node_modules/.bin/biome check benchmarks/http/ramp biome.json
+      - name: Rust checks
+        working-directory: benchmarks/http/ramp/rust
+        run: |
+          cargo fmt --check
+          cargo clippy --all-targets --locked -- -D warnings
+          cargo test --locked
+      - name: Python and harness checks
+        run: |
+          cd benchmarks/http/ramp/python
+          uv sync --frozen --no-dev
+          .venv/bin/python -m unittest discover -s tests -v
+          cd ../../../../
+          uvx --from ruff==0.16.4 ruff format --check benchmarks/http/ramp/python benchmarks/http/ramp/measure benchmarks/http/ramp/tests benchmarks/http/ramp/report
+          uvx --from ruff==0.16.4 ruff check benchmarks/http/ramp/python benchmarks/http/ramp/measure benchmarks/http/ramp/tests benchmarks/http/ramp/report
+          PYTHONPATH=benchmarks/http/ramp uv run --no-project --with PyYAML==6.0.3 --with psutil==7.2.2 python3 -m unittest discover -s benchmarks/http/ramp/tests -p 'test_*.py'
+          PYTHONPATH=benchmarks/http/ramp uv run --no-project --with PyYAML==6.0.3 --with psutil==7.2.2 --with plotly==7.1.0 python3 -m unittest discover -s benchmarks/http/ramp/report/tests -p 'test_*.py'
+      - name: Elixir format and Credo in the pinned runtime
+        run: |
+          docker run --rm --platform linux/amd64 \
+            -v "$GITHUB_WORKSPACE/benchmarks/http/ramp/elixir:/app" \
+            -w /app \
+            hexpm/elixir:1.20.4-erlang-28.5.0.7-debian-bookworm-20260918-slim \
+            /bin/sh -lc 'mix local.hex --force && mix local.rebar --force && MIX_ENV=dev mix deps.get && MIX_ENV=dev mix format --check-formatted && MIX_ENV=dev mix credo --strict'
+
+  contract-images:
+    needs: native-check
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        runtime: [go, node, bun, rust, python, elixir]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.14"
+      - name: Build the native amd64 image
+        run: |
+          docker build --platform linux/amd64 \
+            -f benchmarks/http/ramp/${{ matrix.runtime }}/Dockerfile \
+            -t local/performance-http-ramp-${{ matrix.runtime }}:${{ github.sha }} .
+      - name: Run every framework adapter against the shared contract
+        run: |
+          python3 benchmarks/http/ramp/tests/matrix.py \
+            --runtime ${{ matrix.runtime }} \
+            --image local/performance-http-ramp-${{ matrix.runtime }}:${{ github.sha }}
+
+  publish:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: contract-images
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        runtime: [go, node, bun, rust, python, elixir]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/performance-http-ramp-${{ matrix.runtime }}
+          tags: type=sha,prefix=sha-,format=long
+          labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
+      - id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+        with:
+          context: .
+          file: benchmarks/http/ramp/${{ matrix.runtime }}/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=http-ramp-${{ matrix.runtime }}
+          cache-to: type=gha,mode=max,scope=http-ramp-${{ matrix.runtime }}
+      - name: Record linux/amd64 image digest
+        shell: bash
+        env:
+          IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/performance-http-ramp-${{ matrix.runtime }}
+          IMAGE_INDEX_DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          AMD64_DIGEST="$(docker buildx imagetools inspect "${IMAGE_NAME}@${IMAGE_INDEX_DIGEST}" --raw | jq -er '[.manifests[] | select(.platform.os == "linux" and .platform.architecture == "amd64")] | if length == 1 then .[0].digest else error("Expected exactly one linux/amd64 image manifest") end')"
+          printf '%s@%s\n' "$IMAGE_NAME" "$AMD64_DIGEST" >> "$GITHUB_STEP_SUMMARY"

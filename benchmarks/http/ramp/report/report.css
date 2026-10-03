@@ -1,0 +1,99 @@
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: auto;
+  max-width: 84rem;
+  padding: 1rem;
+  font: 16px system-ui;
+  background: #f7f9fb;
+  color: #18232e;
+}
+section,
+details {
+  background: #fff;
+  border: 1px solid #dbe3ea;
+  border-radius: 0.6rem;
+  padding: 1rem;
+  margin: 1rem 0;
+  min-width: 0;
+}
+#controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.8rem;
+}
+.control-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  align-items: center;
+}
+label {
+  border: 1px solid #b9c6d1;
+  border-radius: 1rem;
+  padding: 0.25rem 0.55rem;
+}
+.key {
+  display: inline-block;
+  width: 0.7rem;
+  height: 0.7rem;
+  border-radius: 50%;
+  margin: 0 0.25rem;
+  vertical-align: middle;
+}
+button,
+select {
+  padding: 0.3rem 0.55rem;
+}
+.plot {
+  min-height: 24rem;
+  min-width: 0;
+}
+.scroll {
+  overflow: auto;
+}
+table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 0.88rem;
+}
+th,
+td {
+  padding: 0.45rem;
+  text-align: left;
+  border-bottom: 1px solid #e3e9ee;
+  white-space: nowrap;
+}
+.bad {
+  color: #a61b1b;
+  font-weight: 700;
+}
+.invalid {
+  color: #8a4b00;
+  font-weight: 700;
+}
+summary {
+  cursor: pointer;
+  font-weight: 700;
+}
+.meta {
+  overflow-wrap: anywhere;
+  color: #44525d;
+}
+.stages {
+  overflow: auto;
+}
+@media (max-width: 390px) {
+  body {
+    padding: 0.5rem;
+    font-size: 14px;
+  }
+  section,
+  details {
+    padding: 0.7rem;
+  }
+  .plot {
+    min-height: 20rem;
+  }
+}

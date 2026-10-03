@@ -1,6 +1,10 @@
 .git
 .DS_Store
 **/node_modules/
+**/.venv/
+**/deps/
+**/_build/
+**/dist/
 **/.cache/
 **/__pycache__/
 **/*.pyc
@@ -9,6 +13,9 @@
 **/*.sqlite-shm
 **/data/
 **/http-go-test
+**/http-ramp-go-contract
+**/performance-http-ramp-rust
+**/erl_crash.dump
 .tools
 .ruff_cache
 results/
