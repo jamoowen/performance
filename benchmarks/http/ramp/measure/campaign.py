@@ -891,6 +891,10 @@ def _recovery(args: argparse.Namespace, baseline: dict[Path, bytes], error: Base
     )
 
 
+def controller_source_revision() -> str:
+    return _git(Path(__file__).resolve().parents[4], "rev-parse", "HEAD").stdout.strip()
+
+
 def _load_result(
     args: argparse.Namespace, row: dict[str, Any], attempt_id: str
 ) -> tuple[Path, dict[str, Any]]:
@@ -940,6 +944,7 @@ def validate_invalid_result(args: argparse.Namespace, row: dict[str, Any], attem
         validity.get("status") != "invalid"
         or not isinstance(validity.get("reasons"), list)
         or not validity["reasons"]
+        or not all(isinstance(reason, str) and reason for reason in validity["reasons"])
         or isinstance(counts.get("requests"), bool)
         or not isinstance(counts.get("requests"), int)
         or counts["requests"] <= 0
@@ -1057,7 +1062,7 @@ def run(args: argparse.Namespace) -> int:
             entry = {
                 **row,
                 "attemptId": attempt_id,
-                "controllerSourceRevision": _git(repo, "rev-parse", "HEAD").stdout.strip(),
+                "controllerSourceRevision": controller_source_revision(),
                 "generatorPreflight": preflight,
                 "status": "activating",
             }

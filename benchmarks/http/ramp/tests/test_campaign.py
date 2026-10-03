@@ -680,6 +680,10 @@ class CampaignTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "invalid result"):
                 campaign.retained_invalid_attempts(args, {"runs": [invalid_entry]}, [row])
 
+            self._write_result(results, row, RETAINED_ATTEMPT, "invalid", [""])
+            with self.assertRaisesRegex(RuntimeError, "invalid result"):
+                campaign.retained_invalid_attempts(args, {"runs": [invalid_entry]}, [row])
+
             path = self._write_result(results, row, RETAINED_ATTEMPT, "invalid", ["oom"])
             value = json.loads(path.read_text())
             value["metadata"]["image"] = "wrong"
@@ -724,11 +728,18 @@ class CampaignTests(unittest.TestCase):
                     )
                 )
                 stack.enter_context(patch.object(campaign, "_load_journal", return_value=journal))
-                stack.enter_context(
+                source_git = stack.enter_context(
                     patch.object(
                         campaign,
                         "_git",
-                        return_value=subprocess.CompletedProcess([], 0, "controller\n", ""),
+                        side_effect=lambda repo, *_command: subprocess.CompletedProcess(
+                            [],
+                            0,
+                            "performance-source\n"
+                            if repo == Path(campaign.__file__).resolve().parents[4]
+                            else "cluster-source\n",
+                            "",
+                        ),
                     )
                 )
                 stack.enter_context(patch.object(campaign.uuid, "uuid4", return_value=next_attempt))
@@ -750,7 +761,10 @@ class CampaignTests(unittest.TestCase):
             self.assertTrue(journal["runs"][0]["retainedInvalid"])
             self.assertEqual(journal["runs"][0]["resultPath"], str(invalid_path))
             validate_complete.assert_called_once_with(args, complete, complete_attempt)
-            self.assertEqual(journal["runs"][2]["controllerSourceRevision"], "controller")
+            self.assertEqual(journal["runs"][2]["controllerSourceRevision"], "performance-source")
+            source_git.assert_called_once_with(
+                Path(campaign.__file__).resolve().parents[4], "rev-parse", "HEAD"
+            )
             set_variant.assert_called_once_with(
                 Path("repo"), campaign.Variant(3, "go", "fiber"), IMAGE, next_attempt
             )
