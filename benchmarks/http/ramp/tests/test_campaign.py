@@ -271,6 +271,70 @@ class CampaignTests(unittest.TestCase):
                         repo, campaign.Variant(1, "go", "nethttp"), IMAGE, "attempt"
                     )
 
+    def test_set_variant_persists_ramp_and_old_deployments_within_allowlist(self):
+        yaml = campaign._yaml()
+        with tempfile.TemporaryDirectory(prefix="ephemeral-") as directory:
+            repo = Path(directory)
+            subprocess.run(["git", "init", "-q", str(repo)], check=True)
+            subprocess.run(
+                ["git", "-C", str(repo), "config", "user.email", "test@example.com"], check=True
+            )
+            subprocess.run(["git", "-C", str(repo), "config", "user.name", "Test"], check=True)
+            for path in (campaign.APP_PATH, *campaign.OLD_PATHS):
+                document = deployment(replicas=1)
+                document["spec"]["template"]["spec"]["containers"][0]["name"] = path.stem
+                target = repo / path
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(yaml.safe_dump(document, sort_keys=False))
+            subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+            subprocess.run(["git", "-C", str(repo), "commit", "-qm", "baseline"], check=True)
+
+            with patch.object(campaign, "reject_remote_benchmark_conflict"):
+                campaign.set_variant(repo, campaign.Variant(1, "go", "chi"), IMAGE, "attempt-2")
+
+            ramp = yaml.safe_load((repo / campaign.APP_PATH).read_text())
+            container = ramp["spec"]["template"]["spec"]["containers"][0]
+            self.assertEqual(ramp["spec"]["replicas"], 1)
+            self.assertEqual(container["image"], IMAGE)
+            self.assertEqual(
+                ramp["spec"]["template"]["metadata"]["annotations"][
+                    "benchmark.jamoowen.dev/attempt-id"
+                ],
+                "attempt-2",
+            )
+            self.assertEqual(
+                container["resources"],
+                {
+                    "requests": {"cpu": "1", "memory": "512Mi"},
+                    "limits": {"cpu": "1", "memory": "512Mi"},
+                },
+            )
+            self.assertEqual(
+                {item["name"]: item["value"] for item in container["env"]},
+                {
+                    "FRAMEWORK": "chi",
+                    "PORT": "8080",
+                    "SEED_COUNT": "5000",
+                    "SQLITE_PATH": "/data/benchmark.sqlite",
+                    "GOMAXPROCS": "1",
+                    "NODE_ENV": "production",
+                    "ERL_FLAGS": "+S 1:1 +SDcpu 1 +SDio 1",
+                    "RELEASE_DISTRIBUTION": "none",
+                    "RELEASE_TMP": "/tmp/ramp",
+                },
+            )
+            self.assertTrue(
+                all(
+                    yaml.safe_load((repo / path).read_text())["spec"]["replicas"] == 0
+                    for path in campaign.OLD_PATHS
+                )
+            )
+            changed = {
+                Path(path)
+                for path in campaign._git(repo, "diff", "--name-only").stdout.splitlines()
+            }
+            self.assertEqual(changed, campaign.ALLOWED_PATHS)
+
     def test_remote_conflict_checks_only_remote_divergence_and_never_forces(self):
         calls = []
 

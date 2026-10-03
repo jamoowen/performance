@@ -398,6 +398,7 @@ def set_variant(repo: Path, variant: Variant, image: str, attempt_id: str) -> No
             "RELEASE_TMP": "/tmp/ramp",
         },
     )
+    (repo / APP_PATH).write_text(yaml.safe_dump(ramp, sort_keys=False))
     _git(repo, "diff", "--check")
     changed = {Path(path) for path in _git(repo, "diff", "--name-only").stdout.splitlines()}
     if not changed <= ALLOWED_PATHS:
