@@ -16,6 +16,8 @@ make publish-report
 
 Follow-up campaigns use `make report-suite` to regenerate five isolated interactive pages. The Pages index keeps scheduling, SQLite, memory, framework, and scaling recordings in separate charts. Commit and push `docs/` after generating the suite to publish the updated Pages artifacts.
 
+After a complete SQLite-ramp campaign, generate its local interactive report with `make ramp-report RAMP_RESULTS_DIR=results/http/sqlite-ramp RAMP_OUTPUT_DIR=results/http/sqlite-ramp/report`.
+
 ## 1. memory consumption, request latency across different languages with REALISTIC tests
 ### why? -> I want to see which backend language is the most performant given my usual narrowly scoped needs
  **using sqlite as db

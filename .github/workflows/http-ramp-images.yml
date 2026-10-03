@@ -40,7 +40,7 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
         with:
           bun-version: "1.4.2"
-      - uses: actions/setup-node@8f152de45cc393bb48ce5d89d3b731f54556e65
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
         with:
           node-version: "24.21.0"
       - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d
@@ -165,4 +165,4 @@ jobs:
           IMAGE_INDEX_DIGEST: ${{ steps.build.outputs.digest }}
         run: |
           AMD64_DIGEST="$(docker buildx imagetools inspect "${IMAGE_NAME}@${IMAGE_INDEX_DIGEST}" --raw | jq -er '[.manifests[] | select(.platform.os == "linux" and .platform.architecture == "amd64")] | if length == 1 then .[0].digest else error("Expected exactly one linux/amd64 image manifest") end')"
-          printf '%s@%s\n' "$IMAGE_NAME" "$AMD64_DIGEST" >> "$GITHUB_STEP_SUMMARY"
+          printf '%s@%s\n' "$IMAGE_NAME" "$AMD64_DIGEST" | tee -a "$GITHUB_STEP_SUMMARY"
