@@ -39,6 +39,16 @@ descriptive recordings rather than universal rankings. The [ramp
 README](benchmarks/http/ramp/README.md), [experiment plan](docs/experiments/sqlite-ramp-plan.md),
 and report source document the methodology and generation workflow.
 
+## Adaptive SQLite capacity search
+
+The next campaign keeps the same application workload but performs short,
+separate steps and stops after sustained overload. It covers 13 adapters,
+omitting Plug and Rocket. The [capacity experiment plan](docs/experiments/sqlite-capacity-plan.md)
+and [capacity harness README](benchmarks/http/capacity/README.md) describe the
+adaptive protocol, pod-level OOM telemetry, and the limits of its shared Wi-Fi,
+one-CPU environment. A public report link will be added after real captures are
+available.
+
 ## 1. memory consumption, request latency across different languages with REALISTIC tests
 ### why? -> I want to see which backend language is the most performant given my usual narrowly scoped needs
  **using sqlite as db

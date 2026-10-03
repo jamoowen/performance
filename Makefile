@@ -27,7 +27,7 @@ PUBLISH_DIR ?= docs/reports/http
 
 -include .local.mk
 
-.PHONY: tools format format-check lint check test build build-go build-bun build-rust build-load push load load-go load-bun record-go record-bun record-rust compare publish-report report-suite run-campaign ramp-tools ramp-format-check ramp-check ramp-contracts ramp-build ramp-campaign ramp-report
+.PHONY: tools format format-check lint check test build build-go build-bun build-rust build-load push load load-go load-bun record-go record-bun record-rust compare publish-report report-suite run-campaign ramp-tools ramp-format-check ramp-check ramp-contracts ramp-build ramp-campaign ramp-report capacity-check capacity-campaign capacity-report
 
 GOLANGCI_LINT := GOCACHE=$(CURDIR)/.cache/go-build GOMODCACHE=$(CURDIR)/.cache/go-mod GOLANGCI_LINT_CACHE=$(CURDIR)/.cache/golangci-lint $(CURDIR)/.tools/bin/golangci-lint
 RUFF := UV_CACHE_DIR=$(CURDIR)/.cache/uv UV_TOOL_DIR=$(CURDIR)/.cache/uv-tools uvx --from ruff==0.16.4 ruff
@@ -206,3 +206,22 @@ ramp-report:
 	@test -n "$(RAMP_INPUT)$(RAMP_RESULTS_DIR)" || { echo "RAMP_INPUT or RAMP_RESULTS_DIR is required"; exit 2; }
 	@test -z "$(RAMP_INPUT)" -o -z "$(RAMP_RESULTS_DIR)" || { echo "use only one of RAMP_INPUT or RAMP_RESULTS_DIR"; exit 2; }
 	UV_CACHE_DIR=$(CURDIR)/.cache/uv PYTHONPATH=$(RAMP_ROOT) uv run --no-project --with plotly==7.1.0 python3 -m report.report $(if $(RAMP_RESULTS_DIR),--results-dir "$(RAMP_RESULTS_DIR)","$(RAMP_INPUT)") --output-dir "$(RAMP_OUTPUT_DIR)"
+
+CAPACITY_ROOT := benchmarks/http/capacity
+CAPACITY_RESULTS_DIR ?= results/http/sqlite-capacity
+CAPACITY_OUTPUT_DIR ?= docs/reports/http/sqlite-capacity
+CAPACITY_CAMPAIGN_ARGS ?=
+
+capacity-check:
+	$(RUFF) format --check $(CAPACITY_ROOT)
+	$(RUFF) check $(CAPACITY_ROOT)
+	UV_CACHE_DIR=$(CURDIR)/.cache/uv PYTHONPATH=$(CURDIR) uv run --no-project --with PyYAML==6.0.3 --with psutil==7.2.2 python3 -m unittest discover -s $(CAPACITY_ROOT)/tests -p 'test_*.py'
+	./node_modules/.bin/biome check --formatter-enabled=true --linter-enabled=false --assist-enabled=false $(CAPACITY_ROOT)/load.js biome.json
+	UV_CACHE_DIR=$(CURDIR)/.cache/uv PYTHONPATH=$(CURDIR) uv run --no-project --with plotly==7.1.0 python3 -m unittest discover -s $(CAPACITY_ROOT)/report/tests -p 'test_*.py'
+	./node_modules/.bin/biome check --formatter-enabled=true --linter-enabled=false --assist-enabled=false $(CAPACITY_ROOT)/report/report.js biome.json
+
+capacity-campaign:
+	UV_CACHE_DIR=$(CURDIR)/.cache/uv PYTHONPATH=$(CURDIR) uv run --no-project --with PyYAML==6.0.3 --with psutil==7.2.2 python3 -m benchmarks.http.capacity.campaign $(CAPACITY_CAMPAIGN_ARGS)
+
+capacity-report:
+	UV_CACHE_DIR=$(CURDIR)/.cache/uv PYTHONPATH=$(CURDIR) uv run --no-project --with plotly==7.1.0 python3 -m benchmarks.http.capacity.report --results-dir "$(CAPACITY_RESULTS_DIR)" --output-dir "$(CAPACITY_OUTPUT_DIR)"

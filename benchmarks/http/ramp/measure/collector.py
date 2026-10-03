@@ -110,6 +110,7 @@ def resource_delta(previous, current):
         "cfsPeriodRatio": throttled_periods / periods if periods else 0,
         "workingSetBytes": max(0, current["memory_current"] - current.get("inactive_file", 0)),
         "memoryCurrentBytes": current["memory_current"],
+        "memoryPeakBytes": current.get("memory_peak"),
         "oomKills": oom,
         "cpuPressureTotalMicroseconds": cpu_pressure_total,
         "memoryPressureTotalMicroseconds": memory_pressure_total,
@@ -355,14 +356,22 @@ class GeneratorCollector:
     pid: int
     interface: str | None = None
     interval: float = 1.0
+    log_dir: Path | str | None = None
     samples: list = field(default_factory=list)
     errors: list = field(default_factory=list)
     _stop: object = field(default_factory=threading.Event)
     _thread: object = None
     _started_monotonic: float | None = None
     _ended_monotonic: float | None = None
+    _log: object = None
 
     def start(self):
+        if self.log_dir is not None:
+            directory = Path(self.log_dir)
+            if not directory.is_dir():
+                raise ValueError("generator log_dir must be an existing directory")
+            self._log = (directory / "generator-telemetry.jsonl").open("w", encoding="utf-8")
+            os.chmod(self._log.name, 0o600)
         self._started_monotonic = time.monotonic()
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
@@ -386,6 +395,8 @@ class GeneratorCollector:
     def join(self, timeout=5):
         if self._thread:
             self._thread.join(timeout)
+        if self._log and not self._log.closed:
+            self._log.close()
         return self.result()
 
     def sample(self):
@@ -410,6 +421,8 @@ class GeneratorCollector:
             "hostCpuPercent": psutil.cpu_percent(interval=None, percpu=True),
             "interfaceBytesSent": net.bytes_sent if net else None,
             "interfaceBytesRecv": net.bytes_recv if net else None,
+            "numThreads": process.num_threads(),
+            "numFds": getattr(process, "num_fds", lambda: None)(),
         }
         if self.samples:
             elapsed = monotonic - self.samples[-1]["monotonicSeconds"]
@@ -419,6 +432,10 @@ class GeneratorCollector:
                 else None
             )
         self.samples.append(item)
+        if self._log:
+            self._log.write(json.dumps(item, separators=(",", ":")) + "\n")
+            self._log.flush()
+            os.fsync(self._log.fileno())
         return item
 
     def result(self):
