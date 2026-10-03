@@ -940,14 +940,17 @@ def validate_invalid_result(args: argparse.Namespace, row: dict[str, Any], attem
     path, value = _load_result(args, row, attempt_id)
     validity = value.get("validity", {})
     counts = value.get("counts", {})
+    requests = counts.get("requests") if isinstance(counts, dict) else None
     if (
         validity.get("status") != "invalid"
         or not isinstance(validity.get("reasons"), list)
         or not validity["reasons"]
         or not all(isinstance(reason, str) and reason for reason in validity["reasons"])
-        or isinstance(counts.get("requests"), bool)
-        or not isinstance(counts.get("requests"), int)
-        or counts["requests"] <= 0
+        or not isinstance(counts, dict)
+        or (
+            requests is not None
+            and (isinstance(requests, bool) or not isinstance(requests, int) or requests < 0)
+        )
     ):
         raise RuntimeError("retained invalid attempt has an invalid result.json")
     return path

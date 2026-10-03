@@ -677,8 +677,24 @@ class CampaignTests(unittest.TestCase):
             value = json.loads(path.read_text())
             value["counts"]["requests"] = 0
             path.write_text(json.dumps(value))
-            with self.assertRaisesRegex(RuntimeError, "invalid result"):
-                campaign.retained_invalid_attempts(args, {"runs": [invalid_entry]}, [row])
+            self.assertIn(
+                "identity",
+                campaign.retained_invalid_attempts(args, {"runs": [invalid_entry]}, [row]),
+            )
+
+            value["counts"] = {}
+            path.write_text(json.dumps(value))
+            self.assertIn(
+                "identity",
+                campaign.retained_invalid_attempts(args, {"runs": [invalid_entry]}, [row]),
+            )
+
+            for requests in (-1, True, "1"):
+                value["counts"] = {"requests": requests}
+                path.write_text(json.dumps(value))
+                with self.subTest(requests=requests):
+                    with self.assertRaisesRegex(RuntimeError, "invalid result"):
+                        campaign.retained_invalid_attempts(args, {"runs": [invalid_entry]}, [row])
 
             self._write_result(results, row, RETAINED_ATTEMPT, "invalid", [""])
             with self.assertRaisesRegex(RuntimeError, "invalid result"):
@@ -690,6 +706,13 @@ class CampaignTests(unittest.TestCase):
             path.write_text(json.dumps(value))
             with self.assertRaisesRegex(RuntimeError, "metadata"):
                 campaign.retained_invalid_attempts(args, {"runs": [invalid_entry]}, [row])
+
+            path = self._write_result(results, row, RETAINED_ATTEMPT, "valid")
+            value = json.loads(path.read_text())
+            value["counts"]["requests"] = 0
+            path.write_text(json.dumps(value))
+            with self.assertRaisesRegex(RuntimeError, "valid request"):
+                campaign.validate_result(args, row, RETAINED_ATTEMPT)
 
     def test_run_retains_invalid_skips_it_and_restores_after_next_variant(self):
         invalid = self._row(1, "invalid")
