@@ -124,6 +124,16 @@ def arguments(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--schedule-json", type=Path)
     parser.add_argument("--attempt-id")
     parser.add_argument("--resume", action="store_true")
+    parser.add_argument(
+        "--retain-invalid-attempt",
+        action="append",
+        default=[],
+        metavar="UUID",
+        help=(
+            "retain a reviewed invalid attempt without rerunning it; it is not a valid "
+            "capacity measurement"
+        ),
+    )
     parser.add_argument("--local-only", action="store_true")
     parser.add_argument("--execute", action="store_true")
     args = parser.parse_args(argv)
@@ -137,6 +147,16 @@ def arguments(argv: list[str] | None = None) -> argparse.Namespace:
         parser.error("--execute requires --image-map")
     if args.resume and not args.execute:
         parser.error("--resume requires --execute")
+    if args.retain_invalid_attempt and (not args.execute or not args.resume):
+        parser.error("--retain-invalid-attempt requires --execute --resume")
+    if len(set(args.retain_invalid_attempt)) != len(args.retain_invalid_attempt):
+        parser.error("--retain-invalid-attempt UUID values must not be duplicated")
+    for attempt_id in args.retain_invalid_attempt:
+        try:
+            if str(uuid.UUID(attempt_id)) != attempt_id:
+                raise ValueError
+        except ValueError:
+            parser.error("--retain-invalid-attempt must be a canonical UUID")
     if args.harness_source_revision is None:
         args.harness_source_revision = args.source_revision
     if args.execute and (
@@ -871,7 +891,9 @@ def _recovery(args: argparse.Namespace, baseline: dict[Path, bytes], error: Base
     )
 
 
-def validate_result(args: argparse.Namespace, row: dict[str, Any], attempt_id: str) -> Path:
+def _load_result(
+    args: argparse.Namespace, row: dict[str, Any], attempt_id: str
+) -> tuple[Path, dict[str, Any]]:
     path = args.results_dir / attempt_id / "result.json"
     try:
         value = json.loads(path.read_text())
@@ -892,6 +914,11 @@ def validate_result(args: argparse.Namespace, row: dict[str, Any], attempt_id: s
     }
     if any(metadata.get(key) != value for key, value in expected.items()):
         raise RuntimeError("recorder result metadata does not match the campaign identity")
+    return path, value
+
+
+def validate_result(args: argparse.Namespace, row: dict[str, Any], attempt_id: str) -> Path:
+    path, value = _load_result(args, row, attempt_id)
     counts = value.get("counts", {})
     if value.get("validity", {}).get("status") != "valid":
         raise RuntimeError("recorder result is not a valid measurement")
@@ -902,6 +929,61 @@ def validate_result(args: argparse.Namespace, row: dict[str, Any], attempt_id: s
     ):
         raise RuntimeError("recorder result lacks valid request and stock-success counts")
     return path
+
+
+def validate_invalid_result(args: argparse.Namespace, row: dict[str, Any], attempt_id: str) -> Path:
+    """Validate a reviewed invalid result without treating it as a measurement."""
+    path, value = _load_result(args, row, attempt_id)
+    validity = value.get("validity", {})
+    counts = value.get("counts", {})
+    if (
+        validity.get("status") != "invalid"
+        or not isinstance(validity.get("reasons"), list)
+        or not validity["reasons"]
+        or isinstance(counts.get("requests"), bool)
+        or not isinstance(counts.get("requests"), int)
+        or counts["requests"] <= 0
+    ):
+        raise RuntimeError("retained invalid attempt has an invalid result.json")
+    return path
+
+
+def retained_invalid_attempts(
+    args: argparse.Namespace, journal: dict[str, Any], rows: list[dict[str, Any]]
+) -> dict[str, tuple[dict[str, Any], Path]]:
+    """Validate explicitly retained invalid attempts before any cluster mutation."""
+    requested = getattr(args, "retain_invalid_attempt", [])
+    if not requested:
+        return {}
+    if not args.resume:
+        raise RuntimeError("--retain-invalid-attempt requires --resume")
+    if len(set(requested)) != len(requested):
+        raise RuntimeError("--retain-invalid-attempt UUID values must not be duplicated")
+    retained = {}
+    for attempt_id in requested:
+        try:
+            if not isinstance(attempt_id, str) or str(uuid.UUID(attempt_id)) != attempt_id:
+                raise ValueError
+        except ValueError as error:
+            raise RuntimeError("--retain-invalid-attempt must be a canonical UUID") from error
+        matches = [item for item in journal["runs"] if item.get("attemptId") == attempt_id]
+        if len(matches) != 1:
+            raise RuntimeError("--retain-invalid-attempt does not identify one prior attempt")
+        entry = matches[0]
+        if entry.get("status") != "invalid":
+            raise RuntimeError("--retain-invalid-attempt must identify an invalid attempt")
+        row_matches = [row for row in rows if row["identity"] == entry.get("identity")]
+        if len(row_matches) != 1:
+            raise RuntimeError("retained invalid attempt identity does not match this campaign")
+        row = row_matches[0]
+        latest = next(
+            (item for item in reversed(journal["runs"]) if item.get("identity") == row["identity"]),
+            None,
+        )
+        if latest is not entry:
+            raise RuntimeError("--retain-invalid-attempt must identify the latest prior attempt")
+        retained[row["identity"]] = (entry, validate_invalid_result(args, row, attempt_id))
+    return retained
 
 
 def restore_remote(args: argparse.Namespace, repo: Path, baseline: dict[Path, bytes]) -> str | None:
@@ -934,6 +1016,7 @@ def run(args: argparse.Namespace) -> int:
         persist_baseline(args, baseline)
     schedule = rendered["schedule"]
     journal = _load_journal(args)
+    retained = retained_invalid_attempts(args, journal, rendered["runs"])
     failure: BaseException | None = None
     try:
         for row in rendered["runs"]:
@@ -963,10 +1046,18 @@ def run(args: argparse.Namespace) -> int:
             if previous and previous.get("status") == "complete":
                 validate_result(args, row, previous["attemptId"])
                 continue
+            if previous and previous.get("status") == "invalid" and identity in retained:
+                entry, result_path = retained[identity]
+                if entry is previous:
+                    entry["retainedInvalid"] = True
+                    entry["resultPath"] = str(result_path)
+                    _write_journal(args, journal)
+                    continue
             attempt_id = args.attempt_id or str(uuid.uuid4())
             entry = {
                 **row,
                 "attemptId": attempt_id,
+                "controllerSourceRevision": _git(repo, "rev-parse", "HEAD").stdout.strip(),
                 "generatorPreflight": preflight,
                 "status": "activating",
             }

@@ -14,6 +14,7 @@ from benchmarks.http.ramp.measure import campaign
 
 IMAGE = "ghcr.io/jamoowen/performance-http-ramp-go@sha256:" + "a" * 64
 CONFIG_IMAGE = "sha256:" + "b" * 64
+RETAINED_ATTEMPT = "7e57f571-2a63-413f-b747-cb3f521d3f2c"
 
 
 def deployment(replicas: int = 1, image: str = IMAGE, attempt: str = "attempt") -> dict:
@@ -87,6 +88,60 @@ def pod(terminating: bool = False) -> dict:
 
 
 class CampaignTests(unittest.TestCase):
+    def _resume_args(self, results: Path, retained: list[str]) -> argparse.Namespace:
+        return argparse.Namespace(
+            execute=True,
+            image_map=Path("images.json"),
+            results_dir=results,
+            resume=True,
+            retain_invalid_attempt=retained,
+            cluster_repo=Path("repo"),
+            attempt_id=None,
+            source_revision="source",
+            harness_source_revision="harness",
+        )
+
+    def _row(self, order: int, identity: str, framework: str = "nethttp") -> dict:
+        return {
+            "order": order,
+            "runtime": "go",
+            "framework": framework,
+            "identity": identity,
+            "image": IMAGE,
+            "loadHash": "load",
+            "scheduleHash": "schedule",
+        }
+
+    def _write_result(
+        self,
+        results: Path,
+        row: dict,
+        attempt_id: str,
+        status: str,
+        reasons: list[str] | None = None,
+    ) -> Path:
+        path = results / attempt_id / "result.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(
+                {
+                    "metadata": {
+                        "attemptId": attempt_id,
+                        "runtime": row["runtime"],
+                        "framework": row["framework"],
+                        "image": row["image"],
+                        "sourceRevision": "source",
+                        "harnessSourceRevision": "harness",
+                        "loadHash": row["loadHash"],
+                        "scheduleHash": row["scheduleHash"],
+                    },
+                    "counts": {"requests": 1, "stockSuccesses": 1},
+                    "validity": {"status": status, "reasons": reasons or []},
+                }
+            )
+        )
+        return path
+
     def test_fixed_interleaved_order_and_identity(self):
         self.assertEqual(campaign.VARIANTS[0], ("go", "nethttp"))
         self.assertEqual(campaign.VARIANTS[-1], ("rust", "rocket"))
@@ -492,6 +547,13 @@ class CampaignTests(unittest.TestCase):
                         campaign, "set_variant", side_effect=RuntimeError("activation failed")
                     )
                 )
+                stack.enter_context(
+                    patch.object(
+                        campaign,
+                        "_git",
+                        return_value=subprocess.CompletedProcess([], 0, "controller\n", ""),
+                    )
+                )
                 restore = stack.enter_context(patch.object(campaign, "restore_remote"))
                 stack.enter_context(patch.object(campaign, "_recovery"))
                 with self.assertRaisesRegex(RuntimeError, "activation failed"):
@@ -548,6 +610,194 @@ class CampaignTests(unittest.TestCase):
             snapshot.assert_not_called()
             persist.assert_not_called()
             self.assertEqual(baseline_file.read_bytes(), before)
+
+    def test_retain_invalid_attempt_cli_requires_resume_and_unique_canonical_uuid(self):
+        common = [
+            "--cluster-repo",
+            "ephemeral/cluster",
+            "--ssh-host",
+            "user@host",
+            "--node-ip",
+            "127.0.0.1",
+            "--source-revision",
+            "a" * 40,
+            "--results-dir",
+            "results",
+            "--execute",
+            "--image-map",
+            "images.json",
+            "--retain-invalid-attempt",
+            RETAINED_ATTEMPT,
+        ]
+        with self.assertRaises(SystemExit):
+            campaign.arguments(common)
+        with self.assertRaises(SystemExit):
+            campaign.arguments([*common, "--resume", "--retain-invalid-attempt", "not-a-uuid"])
+        with self.assertRaises(SystemExit):
+            campaign.arguments([*common, "--resume", "--retain-invalid-attempt", RETAINED_ATTEMPT])
+
+    def test_retained_invalid_attempt_rejects_invalid_prior_state(self):
+        row = self._row(1, "identity")
+        with tempfile.TemporaryDirectory() as directory:
+            results = Path(directory)
+            args = self._resume_args(results, [RETAINED_ATTEMPT])
+            invalid_entry = {**row, "attemptId": RETAINED_ATTEMPT, "status": "invalid"}
+            cases = (
+                ({"runs": []}, "does not identify"),
+                ({"runs": [{**invalid_entry, "status": "complete"}]}, "must identify an invalid"),
+                ({"runs": [{**invalid_entry, "status": "recording"}]}, "must identify an invalid"),
+                (
+                    {"runs": [{**invalid_entry, "identity": "different"}]},
+                    "identity does not match",
+                ),
+                (
+                    {
+                        "runs": [
+                            invalid_entry,
+                            {
+                                **invalid_entry,
+                                "attemptId": "f57f571-2a63-413f-b747-cb3f521d3f2c",
+                            },
+                        ]
+                    },
+                    "latest prior",
+                ),
+                ({"runs": [invalid_entry]}, "readable result"),
+            )
+            for journal, message in cases:
+                with self.subTest(message=message):
+                    with self.assertRaisesRegex(RuntimeError, message):
+                        campaign.retained_invalid_attempts(args, journal, [row])
+
+            self._write_result(results, row, RETAINED_ATTEMPT, "valid")
+            with self.assertRaisesRegex(RuntimeError, "invalid result"):
+                campaign.retained_invalid_attempts(args, {"runs": [invalid_entry]}, [row])
+
+            path = self._write_result(results, row, RETAINED_ATTEMPT, "invalid", ["oom"])
+            value = json.loads(path.read_text())
+            value["counts"]["requests"] = 0
+            path.write_text(json.dumps(value))
+            with self.assertRaisesRegex(RuntimeError, "invalid result"):
+                campaign.retained_invalid_attempts(args, {"runs": [invalid_entry]}, [row])
+
+            path = self._write_result(results, row, RETAINED_ATTEMPT, "invalid", ["oom"])
+            value = json.loads(path.read_text())
+            value["metadata"]["image"] = "wrong"
+            path.write_text(json.dumps(value))
+            with self.assertRaisesRegex(RuntimeError, "metadata"):
+                campaign.retained_invalid_attempts(args, {"runs": [invalid_entry]}, [row])
+
+    def test_run_retains_invalid_skips_it_and_restores_after_next_variant(self):
+        invalid = self._row(1, "invalid")
+        complete = self._row(2, "complete", "chi")
+        next_row = self._row(3, "next", "fiber")
+        complete_attempt = "e57f571-2a63-413f-b747-cb3f521d3f2c"
+        next_attempt = "f57f571-2a63-413f-b747-cb3f521d3f2c"
+        journal = {
+            "runs": [
+                {**invalid, "attemptId": RETAINED_ATTEMPT, "status": "invalid"},
+                {**complete, "attemptId": complete_attempt, "status": "complete"},
+            ]
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            results = Path(directory)
+            args = self._resume_args(results, [RETAINED_ATTEMPT])
+            invalid_path = self._write_result(
+                results, invalid, RETAINED_ATTEMPT, "invalid", ["kernel_oom"]
+            )
+            before = invalid_path.read_bytes()
+            self._write_result(results, complete, complete_attempt, "valid")
+            with ExitStack() as stack:
+                stack.enter_context(patch.object(campaign, "image_map", return_value={}))
+                stack.enter_context(patch.object(campaign, "generator_preflight", return_value={}))
+                stack.enter_context(
+                    patch.object(campaign, "safe_cluster_repo", return_value=Path("repo"))
+                )
+                stack.enter_context(
+                    patch.object(campaign, "load_persisted_baseline", return_value={})
+                )
+                stack.enter_context(
+                    patch.object(
+                        campaign,
+                        "plan",
+                        return_value={"schedule": [], "runs": [invalid, complete, next_row]},
+                    )
+                )
+                stack.enter_context(patch.object(campaign, "_load_journal", return_value=journal))
+                stack.enter_context(
+                    patch.object(
+                        campaign,
+                        "_git",
+                        return_value=subprocess.CompletedProcess([], 0, "controller\n", ""),
+                    )
+                )
+                stack.enter_context(patch.object(campaign.uuid, "uuid4", return_value=next_attempt))
+                set_variant = stack.enter_context(
+                    patch.object(
+                        campaign, "set_variant", side_effect=RuntimeError("stop after next")
+                    )
+                )
+                validate_complete = stack.enter_context(
+                    patch.object(campaign, "validate_result", wraps=campaign.validate_result)
+                )
+                restore = stack.enter_context(patch.object(campaign, "restore_remote"))
+                stack.enter_context(patch.object(campaign, "_recovery"))
+                with self.assertRaisesRegex(RuntimeError, "stop after next"):
+                    campaign.run(args)
+
+            self.assertEqual(invalid_path.read_bytes(), before)
+            self.assertEqual(journal["runs"][0]["status"], "invalid")
+            self.assertTrue(journal["runs"][0]["retainedInvalid"])
+            self.assertEqual(journal["runs"][0]["resultPath"], str(invalid_path))
+            validate_complete.assert_called_once_with(args, complete, complete_attempt)
+            self.assertEqual(journal["runs"][2]["controllerSourceRevision"], "controller")
+            set_variant.assert_called_once_with(
+                Path("repo"), campaign.Variant(3, "go", "fiber"), IMAGE, next_attempt
+            )
+            restore.assert_called_once()
+
+    def test_resume_retries_retained_invalid_without_explicit_uuid(self):
+        row = self._row(1, "invalid")
+        journal = {
+            "runs": [
+                {
+                    **row,
+                    "attemptId": RETAINED_ATTEMPT,
+                    "status": "invalid",
+                    "retainedInvalid": True,
+                }
+            ]
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            args = self._resume_args(Path(directory), [])
+            with ExitStack() as stack:
+                stack.enter_context(patch.object(campaign, "image_map", return_value={}))
+                stack.enter_context(patch.object(campaign, "generator_preflight", return_value={}))
+                stack.enter_context(
+                    patch.object(campaign, "safe_cluster_repo", return_value=Path("repo"))
+                )
+                stack.enter_context(
+                    patch.object(campaign, "load_persisted_baseline", return_value={})
+                )
+                stack.enter_context(
+                    patch.object(campaign, "plan", return_value={"schedule": [], "runs": [row]})
+                )
+                stack.enter_context(patch.object(campaign, "_load_journal", return_value=journal))
+                stack.enter_context(
+                    patch.object(
+                        campaign,
+                        "_git",
+                        return_value=subprocess.CompletedProcess([], 0, "controller\n", ""),
+                    )
+                )
+                set_variant = stack.enter_context(
+                    patch.object(campaign, "set_variant", side_effect=RuntimeError("retrying"))
+                )
+                stack.enter_context(patch.object(campaign, "restore_remote"))
+                stack.enter_context(patch.object(campaign, "_recovery"))
+                with self.assertRaisesRegex(RuntimeError, "retrying"):
+                    campaign.run(args)
+            set_variant.assert_called_once()
 
     def test_execute_rejects_fixed_attempt_and_schedule_ambiguity(self):
         common = [
