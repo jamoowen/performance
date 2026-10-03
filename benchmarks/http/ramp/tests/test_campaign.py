@@ -689,7 +689,7 @@ class CampaignTests(unittest.TestCase):
                 campaign.retained_invalid_attempts(args, {"runs": [invalid_entry]}, [row]),
             )
 
-            for requests in (-1, True, "1"):
+            for requests in (-1, True, "1", None):
                 value["counts"] = {"requests": requests}
                 path.write_text(json.dumps(value))
                 with self.subTest(requests=requests):

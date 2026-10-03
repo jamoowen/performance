@@ -948,7 +948,7 @@ def validate_invalid_result(args: argparse.Namespace, row: dict[str, Any], attem
         or not all(isinstance(reason, str) and reason for reason in validity["reasons"])
         or not isinstance(counts, dict)
         or (
-            requests is not None
+            "requests" in counts
             and (isinstance(requests, bool) or not isinstance(requests, int) or requests < 0)
         )
     ):
