@@ -117,7 +117,7 @@ class ReportTests(unittest.TestCase):
             result["windows"] = []
         return result
 
-    def campaign_directory(self, *, mixed=False):
+    def campaign_directory(self, *, mixed=False, invalid_index=14):
         directory = tempfile.TemporaryDirectory()
         root = Path(directory.name)
         runs = []
@@ -127,7 +127,7 @@ class ReportTests(unittest.TestCase):
                 runtime,
                 framework,
                 attempt,
-                invalid=index == 14,
+                invalid=index == invalid_index,
                 load_hash="7654321" if mixed and index == 1 else "1234567",
             )
             result_path = root / attempt / "result.json"
@@ -138,7 +138,7 @@ class ReportTests(unittest.TestCase):
                     "runtime": runtime,
                     "framework": framework,
                     "attemptId": attempt,
-                    "status": "invalid" if index == 14 else "complete",
+                    "status": "invalid" if index == invalid_index else "complete",
                     "resultPath": str(result_path),
                 }
             )
@@ -152,6 +152,32 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(len(aggregate["runs"]), 15)
         self.assertEqual(aggregate["runs"][-1]["validity"]["status"], "invalid")
         self.assertEqual(len(aggregate["schedule"]["stages"]), 1)
+
+    def test_windowless_invalid_run_is_retained_without_fabricated_csv_rows(self):
+        directory = self.campaign_directory(invalid_index=10)
+        self.addCleanup(directory.cleanup)
+        aggregate = aggregate_results(Path(directory.name))
+        phoenix = next(
+            run
+            for run in aggregate["runs"]
+            if run["runtime"] == "elixir" and run["framework"] == "phoenix"
+        )
+        self.assertEqual(phoenix["validity"]["status"], "invalid")
+        self.assertEqual(phoenix["windows"], [])
+        self.assertEqual(phoenix["metadata"]["runtime"], "elixir")
+
+        data = sanitize(aggregate)
+        retained = next(
+            run
+            for run in data["runs"]
+            if run["runtime"] == "elixir" and run["framework"] == "phoenix"
+        )
+        self.assertEqual(retained["windows"], [])
+        rows = list(csv_rows(data))
+        self.assertEqual(len(rows), 14)
+        self.assertFalse(
+            any(row["runtime"] == "elixir" and row["framework"] == "phoenix" for row in rows)
+        )
 
     def test_aggregate_rejects_mixed_campaign_identity(self):
         directory = self.campaign_directory(mixed=True)
@@ -282,12 +308,27 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(data["runs"][0]["windows"], [])
 
     def test_csv_carries_comparison_provenance_and_window_bounds(self):
-        row = next(csv_rows(sanitize(fixture())))
+        source = fixture()
+        source["runs"][0]["generator"] = {"coverage": 0.98, "headroomFlag": True}
+        row = next(csv_rows(sanitize(source)))
         self.assertEqual(row["source_revision"], "abcdef0")
         self.assertEqual(row["schedule_hash"], "7654321")
         self.assertEqual(row["harness_source_revision"], "fedcba9")
         self.assertEqual(row["window_start_seconds"], 20)
         self.assertEqual(row["window_end_seconds"], 100)
+        self.assertEqual(row["generator_coverage"], 0.98)
+        self.assertIs(row["generator_headroom_flag"], True)
+
+    def test_csv_preserves_nested_window_coverage_and_zero_window_coverage(self):
+        source = fixture()
+        window = source["runs"][0]["windows"][0]
+        window["resource"]["coverage"] = 0.97
+        data = sanitize(source)
+        self.assertEqual(data["runs"][0]["windows"][0]["resource"]["coverage"], 0.97)
+        self.assertEqual(next(csv_rows(data))["window_coverage"], 0.97)
+
+        window["coverage"] = 0
+        self.assertEqual(next(csv_rows(sanitize(source)))["window_coverage"], 0)
 
     def test_document_has_bounded_filter_and_resource_controls(self):
         rendered = document(sanitize(fixture()), "window.Plotly = {}")
@@ -300,6 +341,8 @@ class ReportTests(unittest.TestCase):
         self.assertIn("outcomeReaders", rendered)
         self.assertIn("seconds >= lastStage.stableEndSeconds", rendered)
         self.assertIn('point.phase === "drain"', rendered)
+        self.assertIn('warnings.includes("generator_headroom")', rendered)
+        self.assertIn('warning !== "generator_headroom"', rendered)
         self.assertNotIn("sshHost", rendered)
 
 

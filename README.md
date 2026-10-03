@@ -18,6 +18,27 @@ Follow-up campaigns use `make report-suite` to regenerate five isolated interact
 
 After a complete SQLite-ramp campaign, generate its local interactive report with `make ramp-report RAMP_RESULTS_DIR=results/http/sqlite-ramp RAMP_OUTPUT_DIR=results/http/sqlite-ramp/report`.
 
+## SQLite framework ramp
+
+Explore the [interactive SQLite ramp
+report](https://jamoowen.github.io/performance/reports/http/sqlite-ramp/comparison.html)
+and its [CSV](https://jamoowen.github.io/performance/reports/http/sqlite-ramp/comparison.csv).
+Read the [SQLite ramp findings](docs/reports/http/sqlite-ramp/findings.md) for the
+interpretation and limits of the retained captures.
+
+The SQLite framework ramp compares 15 adapters: Go (`net/http`, Chi, Fiber), Node
+(Express, Nest, Fastify), Bun (native, Hono, Elysia), Rust (Axum, Actix, Rocket),
+Python (FastAPI), and Elixir (Phoenix, Plug). Each variant has one retained
+15-minute, open-arrival-rate ramp at 300, 600, 900, 1200, and 1500 RPS. Go uses
+`CGO_ENABLED=0` with modernc SQLite. The measured resource envelope is one CPU quota
+and 512 MiB with SQLite.
+
+The campaign retains one trial per adapter; a failed generator capture may be
+replaced. It runs on the shared Wi-Fi route and shared node, so results are
+descriptive recordings rather than universal rankings. The [ramp
+README](benchmarks/http/ramp/README.md), [experiment plan](docs/experiments/sqlite-ramp-plan.md),
+and report source document the methodology and generation workflow.
+
 ## 1. memory consumption, request latency across different languages with REALISTIC tests
 ### why? -> I want to see which backend language is the most performant given my usual narrowly scoped needs
  **using sqlite as db

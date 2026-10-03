@@ -318,6 +318,7 @@ def clean_window(value):
             "memoryCurrentBytes",
             "throttledSeconds",
             "cfsPeriodRatio",
+            "coverage",
             "pressure",
         },
         "window resource",
@@ -636,6 +637,8 @@ CSV_FIELDS = [
     "throttled_seconds",
     "resource_coverage",
     "window_coverage",
+    "generator_coverage",
+    "generator_headroom_flag",
     "slo_status",
     "slo_reasons",
 ]
@@ -687,7 +690,13 @@ def csv_rows(data):
                 "memory_current_bytes": resource.get("memoryCurrentBytes"),
                 "throttled_seconds": resource.get("throttledSeconds"),
                 "resource_coverage": run["resource"].get("coverage"),
-                "window_coverage": item.get("coverage") or resource.get("coverage"),
+                "window_coverage": (
+                    item.get("coverage")
+                    if item.get("coverage") is not None
+                    else resource.get("coverage")
+                ),
+                "generator_coverage": run["generator"].get("coverage"),
+                "generator_headroom_flag": run["generator"].get("headroomFlag"),
                 "slo_status": slo.get("status"),
                 "slo_reasons": ";".join(slo["reasons"]),
             }

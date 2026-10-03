@@ -6,13 +6,45 @@ const selectedRuns = new Set(allRuns);
 const selectedRuntimes = new Set(allRuntimes);
 const selectedRates = new Set(allRates);
 const controls = document.getElementById("controls");
-const colors = ["#0072b2", "#d55e00", "#009e73", "#cc79a7", "#e69f00", "#56b4e9", "#000000"];
-const runColor = new Map(data.runs.map((run, index) => [run.id, colors[index % colors.length]]));
+const runtimeColors = {
+  go: "#0072b2",
+  node: "#d55e00",
+  bun: "#009e73",
+  rust: "#cc79a7",
+  python: "#e69f00",
+  elixir: "#56b4e9",
+};
+const frameworkDashes = {
+  nethttp: "solid",
+  express: "solid",
+  native: "solid",
+  axum: "solid",
+  fastapi: "solid",
+  plug: "solid",
+  chi: "dash",
+  fastify: "dash",
+  hono: "dash",
+  actix: "dash",
+  phoenix: "dash",
+  fiber: "dot",
+  nest: "dot",
+  elysia: "dot",
+  rocket: "dot",
+};
+const runColor = new Map(data.runs.map((run) => [run.id, runtimeColors[run.runtime] ?? "#000000"]));
+const runLine = (run) => ({
+  color: runColor.get(run.id),
+  dash: frameworkDashes[run.framework] ?? "solid",
+});
 const htmlEscape = (value) =>
   String(value ?? "").replace(
     /[&<>]/g,
     (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[character],
   );
+const formatNumber = (value, maximumFractionDigits) =>
+  Number.isFinite(value) ? value.toLocaleString(undefined, { maximumFractionDigits }) : "—";
+const formatMiB = (value) => formatNumber(Number.isFinite(value) ? value / 1048576 : null, 1);
+const formatPercent = (value) => formatNumber(Number.isFinite(value) ? value * 100 : null, 2);
 const get = (value, path) => path.split(".").reduce((current, key) => current?.[key], value);
 const activeRuns = () =>
   data.runs.filter((run) => selectedRuns.has(run.id) && selectedRuntimes.has(run.runtime));
@@ -23,8 +55,8 @@ const selectedLabel = (id) => {
 const plotOptions = () => ({ responsive: true });
 const plotLayout = (yTitle) => ({
   showlegend: document.getElementById("show-legends").checked,
-  xaxis: { title: "Elapsed seconds", automargin: true },
-  yaxis: { title: yTitle, automargin: true },
+  xaxis: { title: { text: "Elapsed seconds" }, automargin: true },
+  yaxis: { title: { text: yTitle }, automargin: true },
   margin: { t: 25, b: 55, l: 60, r: 25 },
 });
 
@@ -154,7 +186,7 @@ function tracesForHistory(run, metric, transform = (value) => value) {
     name: `${run.runtime} · ${run.framework}`,
     mode: "lines",
     connectgaps: false,
-    line: { color: runColor.get(run.id) },
+    line: runLine(run),
     marker: { color: runColor.get(run.id) },
     x: run.history.map((point) => point.seconds),
     y: run.history.map((point) => (selectedPoint(point) ? transform(point[metric], point) : null)),
@@ -167,13 +199,19 @@ function render() {
     ...data.limitations,
     ...runs.flatMap((run) => {
       const generator = run.generator || {};
+      const warnings = generator.warnings || [];
       return [
-        ...(generator.headroomFlag
+        ...(run.validity?.status === "invalid"
+          ? [
+              `${run.runtime} · ${run.framework}: incomplete or invalid capture; exclude from capacity rankings.`,
+            ]
+          : []),
+        ...(generator.headroomFlag || warnings.includes("generator_headroom")
           ? [`${run.runtime} · ${run.framework}: generator headroom flag`]
           : []),
-        ...(generator.warnings || []).map(
-          (warning) => `${run.runtime} · ${run.framework}: generator ${warning}`,
-        ),
+        ...warnings
+          .filter((warning) => warning !== "generator_headroom")
+          .map((warning) => `${run.runtime} · ${run.framework}: generator ${warning}`),
       ];
     }),
   ];
@@ -187,7 +225,7 @@ function render() {
     runs.map((run) => ({
       name: `${run.runtime} · ${run.framework}`,
       mode: "lines+markers",
-      line: { color: runColor.get(run.id) },
+      line: runLine(run),
       marker: { color: runColor.get(run.id) },
       x: run.windows
         .filter((window) => window.stable && selectedRates.has(String(window.targetRps)))
@@ -198,7 +236,7 @@ function render() {
     })),
     {
       ...plotLayout(selectedLabel("window-metric")),
-      xaxis: { title: "Target RPS", automargin: true },
+      xaxis: { title: { text: "Target RPS" }, automargin: true },
     },
     plotOptions(),
   );
@@ -219,9 +257,9 @@ function render() {
     "latency",
     latency,
     {
-      xaxis: { title: "Elapsed seconds" },
+      xaxis: { title: { text: "Elapsed seconds" } },
       ...plotLayout(selectedLabel("latency-metric")),
-      yaxis2: { title: "Target RPS", overlaying: "y", side: "right" },
+      yaxis2: { title: { text: "Target RPS" }, overlaying: "y", side: "right" },
       margin: { t: 25 },
     },
     plotOptions(),
@@ -261,6 +299,7 @@ function render() {
       name: `${run.runtime} · ${run.framework}`,
       mode: "lines",
       connectgaps: false,
+      line: runLine(run),
       x: points.map((point) => point.seconds),
       y: points.map((point, index) => {
         if (!selectedPoint(point)) {
@@ -287,7 +326,8 @@ function render() {
     const windows = (run.windows || []).filter(
       (window) => window.stable && selectedRates.has(String(window.targetRps)),
     );
-    card.innerHTML = `<summary>${htmlEscape(run.runtime)} · ${htmlEscape(run.framework)} <span class="${validity.status === "invalid" ? "invalid" : ""}">${htmlEscape(validity.status)}</span></summary><p class="meta">${htmlEscape(validity.reasons.join(", "))}<br>image ${htmlEscape(run.build.imageDigest)} · source ${htmlEscape(run.build.sourceRevision)} · load ${htmlEscape(run.build.loadHash)}<br>${htmlEscape(run.metadata.runtimeVersion)} · ${htmlEscape(run.metadata.frameworkVersion)} · ${htmlEscape(run.metadata.driver)} ${htmlEscape(run.metadata.driverVersion)} · SQLite ${htmlEscape(run.metadata.sqliteVersion)} · workers ${htmlEscape(run.metadata.workers)} · ${htmlEscape(JSON.stringify(run.metadata.workerSettings || run.metadata.compileOptions || {}))} · coverage ${htmlEscape(run.resource.coverage)}</p><div class="stages"><table><thead><tr><th>RPS</th><th>Goodput</th><th>p95 client/service/DB</th><th>CPU/memory/CFS ratio</th><th>Drops/errors</th><th>SLO</th></tr></thead><tbody>${windows.map((window) => `<tr><td>${htmlEscape(window.targetRps)}</td><td>${htmlEscape(window.goodputRps)}</td><td>${htmlEscape(window.client.p95Ms)} / ${htmlEscape(window.serviceP95Ms)} / ${htmlEscape(window.dbP95Ms)}</td><td>${htmlEscape(window.resource.cpuMillicores)} / ${htmlEscape(window.resource.memoryCurrentBytes)} / ${htmlEscape(window.resource.cfsPeriodRatio)}</td><td class="${window.dropped ? "bad" : ""}">${htmlEscape(window.dropped)} / ${htmlEscape(window.httpFailures)} / ${htmlEscape(window.validationFailures)} / ${htmlEscape(window.checksFailed)}</td><td class="${window.slo.status === "fail" ? "bad" : ""}">${htmlEscape(window.slo.status)} ${htmlEscape(window.slo.reasons.join(", "))}</td></tr>`).join("")}</tbody></table></div>`;
+    const hasNoStableWindowStatistics = validity.status === "invalid" && run.windows.length === 0;
+    card.innerHTML = `<summary>${htmlEscape(run.runtime)} · ${htmlEscape(run.framework)} <span class="${validity.status === "invalid" ? "invalid" : ""}">${htmlEscape(validity.status)}</span></summary><p class="meta">${htmlEscape(validity.reasons.join(", "))}<br>image ${htmlEscape(run.build.imageDigest)} · source ${htmlEscape(run.build.sourceRevision)} · load ${htmlEscape(run.build.loadHash)}<br>${htmlEscape(run.metadata.runtimeVersion)} · ${htmlEscape(run.metadata.frameworkVersion)} · ${htmlEscape(run.metadata.driver)} ${htmlEscape(run.metadata.driverVersion)} · SQLite ${htmlEscape(run.metadata.sqliteVersion)} · workers ${htmlEscape(run.metadata.workers)} · ${htmlEscape(JSON.stringify(run.metadata.workerSettings || run.metadata.compileOptions || {}))} · coverage ${htmlEscape(run.resource.coverage)}</p>${hasNoStableWindowStatistics ? "<p>No stable-window statistics are available for this invalid capture.</p>" : ""}<div class="stages"><table><thead><tr><th>RPS</th><th>Goodput (req/s)</th><th>p95 (ms): client / service / DB</th><th>CPU (mCPU) / working set (MiB) / CFS periods (%)</th><th>Drops/errors</th><th>SLO</th></tr></thead><tbody>${windows.map((window) => `<tr><td>${formatNumber(window.targetRps, 0)}</td><td>${formatNumber(window.goodputRps, 1)}</td><td>${formatNumber(window.client.p95Ms, 2)} / ${formatNumber(window.serviceP95Ms, 3)} / ${formatNumber(window.dbP95Ms, 3)}</td><td>${formatNumber(window.resource.cpuMillicores, 1)} / ${formatMiB(window.resource.workingSetBytes)} / ${formatPercent(window.resource.cfsPeriodRatio)}</td><td class="${window.dropped ? "bad" : ""}">${htmlEscape(window.dropped)} / ${htmlEscape(window.httpFailures)} / ${htmlEscape(window.validationFailures)} / ${htmlEscape(window.checksFailed)}</td><td class="${window.slo.status === "fail" ? "bad" : ""}">${htmlEscape(window.slo.status)} ${htmlEscape(window.slo.reasons.join(", "))}</td></tr>`).join("")}</tbody></table></div>`;
     details.append(card);
   });
 }
