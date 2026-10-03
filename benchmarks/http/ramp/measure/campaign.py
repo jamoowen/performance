@@ -549,6 +549,27 @@ def _container_matches_contract(container: dict[str, Any], variant: Variant, ima
     )
 
 
+def pod_container_image_matches(pod: dict[str, Any], container_name: str, image: str) -> bool:
+    """Confirm a named pod container ran the requested immutable image."""
+    containers = pod.get("spec", {}).get("containers", [])
+    statuses = pod.get("status", {}).get("containerStatuses", [])
+    matching_containers = [
+        container for container in containers if container.get("name") == container_name
+    ]
+    matching_statuses = [status for status in statuses if status.get("name") == container_name]
+    if (
+        IMAGE.fullmatch(image) is None
+        or len(matching_containers) != 1
+        or len(matching_statuses) != 1
+    ):
+        return False
+    image_id = matching_statuses[0].get("imageID")
+    return matching_containers[0].get("image") == image and image_id in {
+        image,
+        f"docker-pullable://{image}",
+    }
+
+
 def _ready(pod: dict[str, Any], variant: Variant, attempt_id: str, image: str) -> bool:
     statuses = pod.get("status", {}).get("containerStatuses", [])
     return (
@@ -556,8 +577,8 @@ def _ready(pod: dict[str, Any], variant: Variant, attempt_id: str, image: str) -
         and statuses[0].get("ready") is True
         and statuses[0].get("restartCount") == 0
         and bool(statuses[0].get("containerID"))
-        and statuses[0].get("image") == image
         and len(pod.get("spec", {}).get("containers", [])) == 1
+        and pod_container_image_matches(pod, "http-ramp", image)
         and _container_matches_contract(pod["spec"]["containers"][0], variant, image)
         and pod.get("status", {}).get("phase") == "Running"
         and any(
@@ -743,8 +764,11 @@ def wait_for_baseline(
                 and len(runtime_pods) == replicas
                 and all(
                     _pod_runtime_ready(pod, f"http-{runtime}")
-                    and pod.get("status", {}).get("containerStatuses", [{}])[0].get("image")
-                    == expected_container.get("image")
+                    and pod_container_image_matches(
+                        pod,
+                        expected_container.get("name", ""),
+                        expected_container.get("image"),
+                    )
                     for pod in runtime_pods
                 )
             )

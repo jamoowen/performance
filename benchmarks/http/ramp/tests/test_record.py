@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 import tempfile
 import unittest
@@ -10,8 +11,56 @@ from unittest.mock import MagicMock, patch
 
 from benchmarks.http.ramp.measure import record
 
+IMAGE = "ghcr.io/jamoowen/performance-http-ramp-go@sha256:" + "a" * 64
+
+
+def pod(image_id: str | None = IMAGE) -> dict:
+    status = {
+        "name": "http-ramp",
+        "ready": True,
+        "restartCount": 0,
+        "containerID": "containerd://" + "c" * 64,
+        "image": "sha256:" + "b" * 64,
+    }
+    if image_id is not None:
+        status["imageID"] = image_id
+    return {
+        "metadata": {
+            "name": "http-ramp",
+            "uid": "01234567-89ab-cdef-0123-456789abcdef",
+            "annotations": {"benchmark.jamoowen.dev/attempt-id": "attempt"},
+        },
+        "spec": {"containers": [{"name": "http-ramp", "image": IMAGE}]},
+        "status": {"containerStatuses": [status]},
+    }
+
 
 class RecordTests(unittest.TestCase):
+    def test_load_pod_accepts_resolved_manifest_identity(self):
+        args = SimpleNamespace(
+            ssh_host="host", namespace="my-api", attempt_id="attempt", image=IMAGE
+        )
+        response = SimpleNamespace(stdout=json.dumps({"items": [pod()]}))
+        with patch.object(record, "_ssh", return_value=response):
+            self.assertEqual(
+                record.load_pod(args),
+                {
+                    "pod": "http-ramp",
+                    "uid": "01234567-89ab-cdef-0123-456789abcdef",
+                    "containerId": "c" * 64,
+                },
+            )
+
+    def test_load_pod_rejects_missing_or_wrong_resolved_image_id(self):
+        args = SimpleNamespace(
+            ssh_host="host", namespace="my-api", attempt_id="attempt", image=IMAGE
+        )
+        for image_id in (None, "wrong"):
+            response = SimpleNamespace(stdout=json.dumps({"items": [pod(image_id)]}))
+            with patch.object(record, "_ssh", return_value=response):
+                with self.assertRaisesRegex(RuntimeError, "pod identity"):
+                    record.load_pod(args)
+
     def test_clock_alignment_uses_lowest_rtt_and_midpoint_offset(self):
         with (
             patch.object(record, "_server_clock_ns", side_effect=[110, 220, 330]),

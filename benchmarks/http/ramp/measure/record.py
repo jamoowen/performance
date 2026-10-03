@@ -20,7 +20,7 @@ try:
     import psutil
 except ImportError:
     psutil = None
-from .campaign import generator_preflight, load_hash, schedule_hash
+from .campaign import generator_preflight, load_hash, pod_container_image_matches, schedule_hash
 from .collector import GeneratorCollector, RemoteCollector, validated_ssh_host, weighted_window
 from .collector_remote import SAFE_ID, SAFE_UID
 from .normalize import normalize_k6
@@ -75,15 +75,16 @@ def load_pod(a):
         raise RuntimeError("expected exactly one http-ramp pod")
     pod = pods[0]
     meta, status = pod.get("metadata", {}), pod.get("status", {})
-    container = next(
-        (x for x in status.get("containerStatuses", []) if x.get("name") == "http-ramp"), {}
-    )
+    matching_statuses = [
+        item for item in status.get("containerStatuses", []) if item.get("name") == "http-ramp"
+    ]
+    container = matching_statuses[0] if len(matching_statuses) == 1 else {}
     if (
         meta.get("annotations", {}).get("benchmark.jamoowen.dev/attempt-id") != a.attempt_id
         or meta.get("deletionTimestamp")
         or not container.get("ready")
         or container.get("restartCount") != 0
-        or container.get("image") != a.image
+        or not pod_container_image_matches(pod, "http-ramp", a.image)
     ):
         raise RuntimeError("pod identity does not match attempt/image/readiness")
     uid = meta.get("uid", "")

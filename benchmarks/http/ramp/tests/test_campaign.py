@@ -13,6 +13,7 @@ from unittest.mock import patch
 from benchmarks.http.ramp.measure import campaign
 
 IMAGE = "ghcr.io/jamoowen/performance-http-ramp-go@sha256:" + "a" * 64
+CONFIG_IMAGE = "sha256:" + "b" * 64
 
 
 def deployment(replicas: int = 1, image: str = IMAGE, attempt: str = "attempt") -> dict:
@@ -25,6 +26,7 @@ def deployment(replicas: int = 1, image: str = IMAGE, attempt: str = "attempt") 
                 "spec": {
                     "containers": [
                         {
+                            "name": "http-ramp",
                             "image": image,
                             "resources": {
                                 "requests": {"cpu": "1", "memory": "512Mi"},
@@ -72,10 +74,12 @@ def pod(terminating: bool = False) -> dict:
             "conditions": [{"type": "Ready", "status": "True"}],
             "containerStatuses": [
                 {
+                    "name": "http-ramp",
                     "ready": True,
                     "restartCount": 0,
                     "containerID": "containerd://abc",
-                    "image": IMAGE,
+                    "image": CONFIG_IMAGE,
+                    "imageID": IMAGE,
                 }
             ],
         },
@@ -331,6 +335,23 @@ class CampaignTests(unittest.TestCase):
                 "attempt",
             )[0]
         )
+
+    def test_pod_image_identity_requires_named_spec_and_resolved_image_id(self):
+        self.assertTrue(campaign.pod_container_image_matches(pod(), "http-ramp", IMAGE))
+        docker_pullable = pod()
+        docker_pullable["status"]["containerStatuses"][0]["imageID"] = f"docker-pullable://{IMAGE}"
+        self.assertTrue(campaign.pod_container_image_matches(docker_pullable, "http-ramp", IMAGE))
+
+        for mutate in (
+            lambda item: item["status"]["containerStatuses"][0].pop("imageID"),
+            lambda item: item["status"]["containerStatuses"][0].update({"imageID": "wrong"}),
+            lambda item: item["spec"]["containers"][0].update({"image": "wrong"}),
+            lambda item: item["spec"]["containers"][0].update({"name": "wrong"}),
+            lambda item: item["status"]["containerStatuses"][0].update({"name": "wrong"}),
+        ):
+            item = pod()
+            mutate(item)
+            self.assertFalse(campaign.pod_container_image_matches(item, "http-ramp", IMAGE))
 
     def test_restore_waits_when_baseline_bytes_are_already_current(self):
         args = argparse.Namespace(results_dir=Path("results"))
