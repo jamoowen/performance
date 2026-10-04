@@ -218,7 +218,8 @@ capacity-check:
 	UV_CACHE_DIR=$(CURDIR)/.cache/uv PYTHONPATH=$(CURDIR) uv run --no-project --with PyYAML==6.0.3 --with psutil==7.2.2 python3 -m unittest discover -s $(CAPACITY_ROOT)/tests -p 'test_*.py'
 	./node_modules/.bin/biome check --formatter-enabled=true --linter-enabled=false --assist-enabled=false $(CAPACITY_ROOT)/load.js biome.json
 	UV_CACHE_DIR=$(CURDIR)/.cache/uv PYTHONPATH=$(CURDIR) uv run --no-project --with plotly==7.1.0 python3 -m unittest discover -s $(CAPACITY_ROOT)/report/tests -p 'test_*.py'
-	./node_modules/.bin/biome check --formatter-enabled=true --linter-enabled=false --assist-enabled=false $(CAPACITY_ROOT)/report/report.js biome.json
+	./node_modules/.bin/biome check --formatter-enabled=true --linter-enabled=false --assist-enabled=false $(CAPACITY_ROOT)/report/report.js $(CAPACITY_ROOT)/report/report.css biome.json
+	./node_modules/.bin/biome lint --error-on-warnings $(CAPACITY_ROOT)/load.js $(CAPACITY_ROOT)/report/report.js
 
 capacity-campaign:
 	UV_CACHE_DIR=$(CURDIR)/.cache/uv PYTHONPATH=$(CURDIR) uv run --no-project --with PyYAML==6.0.3 --with psutil==7.2.2 python3 -m benchmarks.http.capacity.campaign $(CAPACITY_CAMPAIGN_ARGS)

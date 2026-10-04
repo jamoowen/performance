@@ -62,15 +62,21 @@ function group(title, values, set) {
   fs.className = "control-group";
   fs.innerHTML = `<legend>${title}</legend><button type="button">All</button><button type="button">None</button>`;
   const refresh = () => {
-    fs.querySelectorAll("input").forEach((i) => (i.checked = set.has(i.value)));
+    fs.querySelectorAll("input").forEach((i) => {
+      i.checked = set.has(i.value);
+    });
     render();
   };
   fs.querySelector("button").onclick = () => {
-    values.forEach((v) => set.add(v.id));
+    values.forEach((v) => {
+      set.add(v.id);
+    });
     refresh();
   };
   fs.querySelectorAll("button")[1].onclick = () => {
-    values.forEach((v) => set.delete(v.id));
+    values.forEach((v) => {
+      set.delete(v.id);
+    });
     refresh();
   };
   values.forEach((v) => {
@@ -113,7 +119,9 @@ function controls() {
         data.runs.map((r) => r.id),
         data.runs.map((r) => r.runtime),
         data.runs.flatMap((r) => r.stages.map((s) => String(s.targetRps))),
-      ][index].forEach((v) => set.add(v));
+      ][index].forEach((v) => {
+        set.add(v);
+      });
     });
     document.getElementById("controls").replaceChildren();
     controls();
@@ -141,14 +149,20 @@ function historyTrace(run, metric, transform = (v) => v) {
     y = [];
   let previous = null;
   run.history.forEach((point) => {
-    if (!selectedHistory(point)) return;
+    if (!selectedHistory(point)) {
+      return;
+    }
     const gap =
       previous &&
       (point.seconds - previous.seconds >
         Math.max(point.bucketSeconds || 5, previous.bucketSeconds || 5) * 1.5 ||
         point.targetRps !== previous.targetRps);
-    if (gap) x.push(null), y.push(null);
-    x.push(point.seconds), y.push(transform(point[metric], point));
+    if (gap) {
+      x.push(null);
+      y.push(null);
+    }
+    x.push(point.seconds);
+    y.push(transform(point[metric], point));
     previous = point;
   });
   return {
@@ -165,15 +179,21 @@ function sampleTrace(run, samples, metric, container = false) {
     y = [];
   let previous = null;
   samples.forEach((point) => {
-    if (!selectedTime(run, point.seconds)) return;
+    if (!selectedTime(run, point.seconds)) {
+      return;
+    }
     const missingInterval =
       previous &&
       Number.isFinite(point.intervalStartSeconds) &&
       Number.isFinite(previous.intervalEndSeconds) &&
       point.intervalStartSeconds - previous.intervalEndSeconds > 2;
     const changedContainer = container && previous && point.segment !== previous.segment;
-    if (missingInterval || changedContainer) x.push(null), y.push(null);
-    x.push(point.seconds), y.push(point[metric]);
+    if (missingInterval || changedContainer) {
+      x.push(null);
+      y.push(null);
+    }
+    x.push(point.seconds);
+    y.push(point[metric]);
     previous = point;
   });
   return { x, y };
@@ -259,25 +279,28 @@ function render() {
     const tr = document.createElement("tr");
     tr.innerHTML = `<td>${r.runtime} · ${r.framework}</td><td>${fmt(c.highestPassingRps, 0)}</td><td>${fmt(c.highestNoOverloadRps, 0)}</td><td>${fmt(c.firstOverloadRps, 0)}</td><td>${causeLabel(r)}</td><td class="${qualification !== "qualified" ? "warn" : ""}">${qualification}</td>`;
     tbody.append(tr);
-    if (r.validity.status !== "valid")
+    if (r.validity.status !== "valid") {
       notes.push(
         `${r.runtime} · ${r.framework}: invalid capture (${r.validity.reasons.join(", ") || "unspecified"}); do not use it for capacity.`,
       );
-    if (c.generatorLimited)
+    }
+    if (c.generatorLimited) {
       notes.push(
         `${r.runtime} · ${r.framework}: a generator guard stopped the run; the boundary is inconclusive.`,
       );
-    else if (r.generator.headroomFlag)
+    } else if (r.generator.headroomFlag) {
       notes.push(
         `${r.runtime} · ${r.framework}: generator headroom warning; this is caution, not proof of saturation.`,
       );
-    if (r.integrity.status !== "verified")
+    }
+    if (r.integrity.status !== "verified") {
       notes.push(
         `${r.runtime} · ${r.framework}: final write integrity is ${r.integrity.status || "unverified"}${r.integrity.qualifier ? ` (${r.integrity.qualifier})` : ""}; HTTP and resource traces remain available.`,
       );
-    r.resource.events.forEach((e) =>
-      notes.push(`${r.runtime} · ${r.framework}: ${e.type} at ${fmt(e.seconds, 1)} s.`),
-    );
+    }
+    r.resource.events.forEach((e) => {
+      notes.push(`${r.runtime} · ${r.framework}: ${e.type} at ${fmt(e.seconds, 1)} s.`);
+    });
   });
   const metadata = document.getElementById("metadata");
   metadata.replaceChildren(...runs.map(metadataCard));
@@ -368,7 +391,9 @@ function render() {
   "resource-metric",
   "cfs-metric",
   "show-legends",
-].forEach((id) => (document.getElementById(id).onchange = render));
+].forEach((id) => {
+  document.getElementById(id).onchange = render;
+});
 document.getElementById("show-legends").checked = innerWidth >= 600;
 controls();
 render();

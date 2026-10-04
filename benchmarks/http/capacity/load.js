@@ -58,15 +58,23 @@ function hash(v, s) {
   return (x ^ (x >>> 16)) >>> 0;
 }
 function phase() {
-  if (mode === "warmup") return [100, "stable"];
+  if (mode === "warmup") {
+    return [100, "stable"];
+  }
   const elapsed = Date.now() / 1000 - exec.scenario.startTime / 1000;
-  if (elapsed < transition) return [target, "transition"];
-  if (elapsed < transition + settling) return [target, "settling"];
+  if (elapsed < transition) {
+    return [target, "transition"];
+  }
+  if (elapsed < transition + settling) {
+    return [target, "settling"];
+  }
   return elapsed < transition + settling + stable ? [target, "stable"] : [0, "drain"];
 }
 function timed(r, tags) {
   const raw = r.headers["Server-Timing"];
-  if (!raw) return false;
+  if (!raw) {
+    return false;
+  }
   const timings = Object.fromEntries(
     raw.split(",").map((part) => {
       const pair = part.trim().split(";dur=");
@@ -79,32 +87,39 @@ function timed(r, tags) {
     timings.service < 0 ||
     timings.db < 0 ||
     timings.db > timings.service + 0.001
-  )
+  ) {
     return false;
+  }
   service.add(timings.service, tags);
   database.add(timings.db, tags);
   return true;
 }
 function shaped(r, operation, id) {
-  if (r.status !== 200) return false;
+  if (r.status !== 200) {
+    return false;
+  }
   try {
     const body = r.json();
-    if (operation === "detail")
+    if (operation === "detail") {
       return (
         body.id === id &&
         body.name === `Product${String(id).padStart(5, "0")}` &&
         Number.isInteger(body.stock) &&
         Number.isInteger(body.revision)
       );
-    if (operation === "list")
+    }
+    if (operation === "list") {
       return body.total === seed && body.products.length === 20 && Number.isInteger(body.offset);
+    }
     return body.id === id && Number.isInteger(body.stock) && Number.isInteger(body.revision);
   } catch (_) {
     return false;
   }
 }
 export function request() {
-  if (exec.vu.iterationInScenario === 0) origin.add(exec.scenario.startTime / 1000);
+  if (exec.vu.iterationInScenario === 0) {
+    origin.add(exec.scenario.startTime / 1000);
+  }
   const iteration = exec.scenario.iterationInTest;
   const [level, phaseName] = phase();
   const id = (hash(iteration, 0x2468ace0) % seed) + 1;
@@ -144,5 +159,7 @@ export function request() {
         ? "success"
         : "validation_error";
   outcomes.add(1, { ...tags, operation, status: String(response.status), outcome });
-  if (operation === "stock" && passed) stocks.add(1, { ...tags, operation });
+  if (operation === "stock" && passed) {
+    stocks.add(1, { ...tags, operation });
+  }
 }

@@ -1,4 +1,103 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="data:,"><title>SQLite capacity search</title><style>*{box-sizing:border-box}body{margin:auto;max-width:84rem;padding:1rem;font:16px system-ui;background:#f7f9fb;color:#18232e}section{background:#fff;border:1px solid #dbe3ea;border-radius:.6rem;padding:1rem;margin:1rem 0;min-width:0}#controls{display:flex;flex-wrap:wrap;gap:.8rem}.control-group{display:flex;flex-wrap:wrap;gap:.35rem;align-items:center}label{border:1px solid #b9c6d1;border-radius:1rem;padding:.25rem .55rem}.key{display:inline-block;width:.7rem;height:.7rem;border-radius:50%;margin:0 .25rem;vertical-align:middle}button,select{padding:.3rem .55rem}.plot{min-height:24rem;min-width:0}.scroll{overflow:auto}table{border-collapse:collapse;width:100%;font-size:.88rem}th,td{padding:.45rem;text-align:left;border-bottom:1px solid #e3e9ee;white-space:nowrap}.bad{color:#a61b1b;font-weight:700}.warn{color:#8a4b00;font-weight:700}details{border-top:1px solid #e3e9ee;padding:.5rem 0}summary{cursor:pointer;font-weight:600}pre{overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;font-size:.8rem}@media(max-width:390px){body{padding:.5rem;font-size:14px}section{padding:.7rem}.plot{min-height:20rem}}
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="data:,"><title>SQLite capacity search</title><style>* {
+  box-sizing: border-box;
+}
+body {
+  margin: auto;
+  max-width: 84rem;
+  padding: 1rem;
+  font: 16px system-ui;
+  background: #f7f9fb;
+  color: #18232e;
+}
+section {
+  background: #fff;
+  border: 1px solid #dbe3ea;
+  border-radius: 0.6rem;
+  padding: 1rem;
+  margin: 1rem 0;
+  min-width: 0;
+}
+#controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.8rem;
+}
+.control-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  align-items: center;
+}
+label {
+  border: 1px solid #b9c6d1;
+  border-radius: 1rem;
+  padding: 0.25rem 0.55rem;
+}
+.key {
+  display: inline-block;
+  width: 0.7rem;
+  height: 0.7rem;
+  border-radius: 50%;
+  margin: 0 0.25rem;
+  vertical-align: middle;
+}
+button,
+select {
+  padding: 0.3rem 0.55rem;
+}
+.plot {
+  min-height: 24rem;
+  min-width: 0;
+}
+.scroll {
+  overflow: auto;
+}
+table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 0.88rem;
+}
+th,
+td {
+  padding: 0.45rem;
+  text-align: left;
+  border-bottom: 1px solid #e3e9ee;
+  white-space: nowrap;
+}
+.bad {
+  color: #a61b1b;
+  font-weight: 700;
+}
+.warn {
+  color: #8a4b00;
+  font-weight: 700;
+}
+details {
+  border-top: 1px solid #e3e9ee;
+  padding: 0.5rem 0;
+}
+summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+pre {
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 0.8rem;
+}
+@media (max-width: 390px) {
+  body {
+    padding: 0.5rem;
+    font-size: 14px;
+  }
+  section {
+    padding: 0.7rem;
+  }
+  .plot {
+    min-height: 20rem;
+  }
+}
 </style></head><body>
 <h1>SQLite API capacity search</h1><p>Single-worker APIs run with one CPU quota and 512 MiB on a shared single-node cluster. Each fresh SQLite database has 5,000 products and a 50% detail, 30% list, 20% stock-write mix. The accepted LAN/Wi-Fi route remains part of every client measurement.</p><p>Each adapter has a 30-second warm-up, then 15 seconds of settling/transition and 75 stable seconds per step. RPS starts at 300, 600, 900, 1200, and 1500, then rises by 25%. k6 uses a fixed 1,024 preallocated and maximum measured VUs with a two-second HTTP timeout.</p><p>Dropped arrivals were never issued because the fixed VU pool was exhausted. They locate a tested request-path/concurrency boundary, not automatically an API CPU ceiling: assess pod CPU, throttling, and server latency first. Generator guards and recorder failures are inconclusive. This remains an exploratory boundary search, not a universal server maximum.</p><p><a href="comparison.csv">Download CSV</a> · <a href="findings.md">Read findings</a></p>
 <section><h2>Filters</h2><div id="controls"></div><label><input id="show-legends" type="checkbox"> Show chart legends</label> <button id="restore" type="button">Restore all filters</button><p id="empty" hidden>No adapters selected.</p></section>
@@ -3693,15 +3792,21 @@ function group(title, values, set) {
   fs.className = "control-group";
   fs.innerHTML = `<legend>${title}</legend><button type="button">All</button><button type="button">None</button>`;
   const refresh = () => {
-    fs.querySelectorAll("input").forEach((i) => (i.checked = set.has(i.value)));
+    fs.querySelectorAll("input").forEach((i) => {
+      i.checked = set.has(i.value);
+    });
     render();
   };
   fs.querySelector("button").onclick = () => {
-    values.forEach((v) => set.add(v.id));
+    values.forEach((v) => {
+      set.add(v.id);
+    });
     refresh();
   };
   fs.querySelectorAll("button")[1].onclick = () => {
-    values.forEach((v) => set.delete(v.id));
+    values.forEach((v) => {
+      set.delete(v.id);
+    });
     refresh();
   };
   values.forEach((v) => {
@@ -3744,7 +3849,9 @@ function controls() {
         data.runs.map((r) => r.id),
         data.runs.map((r) => r.runtime),
         data.runs.flatMap((r) => r.stages.map((s) => String(s.targetRps))),
-      ][index].forEach((v) => set.add(v));
+      ][index].forEach((v) => {
+        set.add(v);
+      });
     });
     document.getElementById("controls").replaceChildren();
     controls();
@@ -3772,14 +3879,20 @@ function historyTrace(run, metric, transform = (v) => v) {
     y = [];
   let previous = null;
   run.history.forEach((point) => {
-    if (!selectedHistory(point)) return;
+    if (!selectedHistory(point)) {
+      return;
+    }
     const gap =
       previous &&
       (point.seconds - previous.seconds >
         Math.max(point.bucketSeconds || 5, previous.bucketSeconds || 5) * 1.5 ||
         point.targetRps !== previous.targetRps);
-    if (gap) x.push(null), y.push(null);
-    x.push(point.seconds), y.push(transform(point[metric], point));
+    if (gap) {
+      x.push(null);
+      y.push(null);
+    }
+    x.push(point.seconds);
+    y.push(transform(point[metric], point));
     previous = point;
   });
   return {
@@ -3796,15 +3909,21 @@ function sampleTrace(run, samples, metric, container = false) {
     y = [];
   let previous = null;
   samples.forEach((point) => {
-    if (!selectedTime(run, point.seconds)) return;
+    if (!selectedTime(run, point.seconds)) {
+      return;
+    }
     const missingInterval =
       previous &&
       Number.isFinite(point.intervalStartSeconds) &&
       Number.isFinite(previous.intervalEndSeconds) &&
       point.intervalStartSeconds - previous.intervalEndSeconds > 2;
     const changedContainer = container && previous && point.segment !== previous.segment;
-    if (missingInterval || changedContainer) x.push(null), y.push(null);
-    x.push(point.seconds), y.push(point[metric]);
+    if (missingInterval || changedContainer) {
+      x.push(null);
+      y.push(null);
+    }
+    x.push(point.seconds);
+    y.push(point[metric]);
     previous = point;
   });
   return { x, y };
@@ -3890,25 +4009,28 @@ function render() {
     const tr = document.createElement("tr");
     tr.innerHTML = `<td>${r.runtime} · ${r.framework}</td><td>${fmt(c.highestPassingRps, 0)}</td><td>${fmt(c.highestNoOverloadRps, 0)}</td><td>${fmt(c.firstOverloadRps, 0)}</td><td>${causeLabel(r)}</td><td class="${qualification !== "qualified" ? "warn" : ""}">${qualification}</td>`;
     tbody.append(tr);
-    if (r.validity.status !== "valid")
+    if (r.validity.status !== "valid") {
       notes.push(
         `${r.runtime} · ${r.framework}: invalid capture (${r.validity.reasons.join(", ") || "unspecified"}); do not use it for capacity.`,
       );
-    if (c.generatorLimited)
+    }
+    if (c.generatorLimited) {
       notes.push(
         `${r.runtime} · ${r.framework}: a generator guard stopped the run; the boundary is inconclusive.`,
       );
-    else if (r.generator.headroomFlag)
+    } else if (r.generator.headroomFlag) {
       notes.push(
         `${r.runtime} · ${r.framework}: generator headroom warning; this is caution, not proof of saturation.`,
       );
-    if (r.integrity.status !== "verified")
+    }
+    if (r.integrity.status !== "verified") {
       notes.push(
         `${r.runtime} · ${r.framework}: final write integrity is ${r.integrity.status || "unverified"}${r.integrity.qualifier ? ` (${r.integrity.qualifier})` : ""}; HTTP and resource traces remain available.`,
       );
-    r.resource.events.forEach((e) =>
-      notes.push(`${r.runtime} · ${r.framework}: ${e.type} at ${fmt(e.seconds, 1)} s.`),
-    );
+    }
+    r.resource.events.forEach((e) => {
+      notes.push(`${r.runtime} · ${r.framework}: ${e.type} at ${fmt(e.seconds, 1)} s.`);
+    });
   });
   const metadata = document.getElementById("metadata");
   metadata.replaceChildren(...runs.map(metadataCard));
@@ -3999,7 +4121,9 @@ function render() {
   "resource-metric",
   "cfs-metric",
   "show-legends",
-].forEach((id) => (document.getElementById(id).onchange = render));
+].forEach((id) => {
+  document.getElementById(id).onchange = render;
+});
 document.getElementById("show-legends").checked = innerWidth >= 600;
 controls();
 render();

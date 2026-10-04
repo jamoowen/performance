@@ -1,102 +1,78 @@
-## interesting things i want to test
+# Performance experiments
 
-The first runnable HTTP baseline lives in [benchmarks/http](benchmarks/http/README.md).
+Real HTTP, JSON, and SQLite experiments running on local Kubernetes.
 
-## HTTP benchmark reports
+## Latest results — SQLite capacity search
 
-Start with the [interactive SQLite capacity report](https://jamoowen.github.io/performance/reports/http/sqlite-capacity/comparison.html) and its [findings](docs/reports/http/sqlite-capacity/findings.md). The [interactive follow-up report index](https://jamoowen.github.io/performance/) and [follow-up findings](docs/reports/http/followup-findings.md), [independent fairness and metrics audit](docs/reports/http/methodology-review.md), and original [comparison report](https://jamoowen.github.io/performance/reports/http/comparison.html), [CSV](https://jamoowen.github.io/performance/reports/http/comparison.csv), and [historical findings](docs/reports/http/findings.md) remain separate prior experiments.
+Start with the [interactive SQLite capacity report](https://jamoowen.github.io/performance/reports/http/sqlite-capacity/comparison.html), the [findings](docs/reports/http/sqlite-capacity/findings.md), and the [live CSV](https://jamoowen.github.io/performance/reports/http/sqlite-capacity/comparison.csv).
 
-Refresh the historical snapshot from the repository root after recording results:
+| Adapter | Highest fully passing RPS | First sustained overload RPS |
+| --- | ---: | ---: |
+| Go net/http | 5724 | 8944 |
+| Go Chi | 5724 | 7155 |
+| Go Fiber | 7155 | 8944 |
+| Node Express | 5724 | 7155 |
+| Node Nest | 4579 | 5724 |
+| Node Fastify | 5724 | 7155 |
+| Bun native | 8944 | 11180 |
+| Bun Hono | 7155 | 11180 |
+| Bun Elysia | 8944 | 11180 |
+| Rust Axum | 11180 | 13975 |
+| Rust Actix | 8944 | 13975 |
+| Python FastAPI | 900 | 1200 |
+| Elixir Phoenix | 300 | 600 |
+
+Fully passing means the whole SLO passed. Sustained overload means at least 1% errors or dropped arrivals over the full stable window, persisting in four consecutive five-second buckets. The highest fully passing tier is an observed step, not a monotonic guarantee; see the [full report](https://jamoowen.github.io/performance/reports/http/sqlite-capacity/comparison.html) for the last tier below overload and detailed metrics.
+
+The 13 valid captures used one CPU quota, 512 MiB, SQLite with 5,000 products, and a 50% detail / 30% list / 20% write mix. They ran on a shared node and Wi-Fi route with 1,024 fixed measured VUs, a two-second deadline, and 90-second tiers (15 seconds settling and 75 seconds stable), increasing by 25% above 1,500 RPS. These are whole-stack exploratory request-path and concurrency results from one trial, not universal language rankings.
+
+Rust reached the highest below-overload tier at 11,180 RPS, versus Bun at 8,944 RPS. Every overload window except Phoenix had zero HTTP and validation errors among completed requests; their overload appeared as dropped, unissued arrivals. Phoenix showed CPU throttling and timeouts at 600 RPS. There was no OOM in this cohort, and Phoenix committed 7,554 writes without an acknowledgement.
+
+## Interactive dashboards
+
+Latest results:
+
+| Experiment | Dashboard |
+| --- | --- |
+| SQLite capacity search | [interactive report](https://jamoowen.github.io/performance/reports/http/sqlite-capacity/comparison.html) |
+
+Historical separate experiments:
+
+| Experiment | Dashboard |
+| --- | --- |
+| 15-adapter SQLite framework ramp | [interactive report](https://jamoowen.github.io/performance/reports/http/sqlite-ramp/comparison.html) |
+| Go scheduling | [interactive report](https://jamoowen.github.io/performance/reports/http/scheduling/comparison.html) |
+| SQLite storage | [interactive report](https://jamoowen.github.io/performance/reports/http/sqlite/comparison.html) |
+| Memory workload | [interactive report](https://jamoowen.github.io/performance/reports/http/memory/comparison.html) |
+| Frameworks | [interactive report](https://jamoowen.github.io/performance/reports/http/frameworks/comparison.html) |
+| Multicore scaling | [interactive report](https://jamoowen.github.io/performance/reports/http/scaling/comparison.html) |
+| Original diagnostic comparison | [interactive report](https://jamoowen.github.io/performance/reports/http/comparison.html) |
+
+Browse the [report index](https://jamoowen.github.io/performance/). Older campaigns also retain [historical findings](docs/reports/http/findings.md), [ramp findings](docs/reports/http/sqlite-ramp/findings.md), [follow-up findings](docs/reports/http/followup-findings.md), and a [methodology audit](docs/reports/http/methodology-review.md); the audit covers its historical experiment rather than certifying the newer capacity campaign.
+
+## Generate and reproduce reports
+
+These commands require local, ignored recordings. Committed `docs/` artifacts are published by the configured `main`/`docs` GitHub Pages workflow; historical findings are maintained manually.
 
 ```sh
+# Latest SQLite capacity search
+make capacity-report
+
+# 15-adapter SQLite framework ramp
+make ramp-report RAMP_RESULTS_DIR=results/http/sqlite-ramp
+
+# Historical follow-up suite
+make report-suite
+
+# Original diagnostic comparison; local results are written under results/http/report/
 make publish-report
+make compare
 ```
 
-`make compare` still creates local artifacts under `results/http/report/`. `make publish-report` regenerates the historical snapshot, copies it into `docs/`, and must be followed by committing and pushing `docs/`; the configured `main`/`docs` GitHub Pages branch then publishes it. Historical findings are manual notes and are not generated by either command.
+The [HTTP benchmark README](benchmarks/http/README.md), [capacity harness README](benchmarks/http/capacity/README.md), [capacity experiment plan](docs/experiments/sqlite-capacity-plan.md), [ramp README](benchmarks/http/ramp/README.md), and [ramp experiment plan](docs/experiments/sqlite-ramp-plan.md) describe the available harnesses and protocols.
 
-Follow-up campaigns use `make report-suite` to regenerate five isolated interactive pages. The Pages index keeps scheduling, SQLite, memory, framework, and scaling recordings in separate charts. Commit and push `docs/` after generating the suite to publish the updated Pages artifacts.
+## Future ideas
 
-After a complete SQLite-ramp campaign, generate its local interactive report with `make ramp-report RAMP_RESULTS_DIR=results/http/sqlite-ramp RAMP_OUTPUT_DIR=results/http/sqlite-ramp/report`.
-
-## SQLite framework ramp
-
-Explore the [interactive SQLite ramp
-report](https://jamoowen.github.io/performance/reports/http/sqlite-ramp/comparison.html)
-and its [CSV](https://jamoowen.github.io/performance/reports/http/sqlite-ramp/comparison.csv).
-Read the [SQLite ramp findings](docs/reports/http/sqlite-ramp/findings.md) for the
-interpretation and limits of the retained captures.
-
-The SQLite framework ramp compares 15 adapters: Go (`net/http`, Chi, Fiber), Node
-(Express, Nest, Fastify), Bun (native, Hono, Elysia), Rust (Axum, Actix, Rocket),
-Python (FastAPI), and Elixir (Phoenix, Plug). Each variant has one retained
-15-minute, open-arrival-rate ramp at 300, 600, 900, 1200, and 1500 RPS. Go uses
-`CGO_ENABLED=0` with modernc SQLite. The measured resource envelope is one CPU quota
-and 512 MiB with SQLite.
-
-The campaign retains one trial per adapter; a failed generator capture may be
-replaced. It runs on the shared Wi-Fi route and shared node, so results are
-descriptive recordings rather than universal rankings. The [ramp
-README](benchmarks/http/ramp/README.md), [experiment plan](docs/experiments/sqlite-ramp-plan.md),
-and report source document the methodology and generation workflow.
-
-## Adaptive SQLite capacity search
-
-The [capacity report](https://jamoowen.github.io/performance/reports/http/sqlite-capacity/comparison.html)
-uses 13 adapters, omitting Plug and Rocket. Each adapter has separate 90-second
-steps: 15 seconds settling/transition and 75 stable seconds at 300, 600, 900,
-1200, and 1500 RPS, then 25% higher targets. It runs with one CPU quota, 512 MiB, a
-shared node and accepted Wi-Fi route, fixed 1,024 measured VUs, and a two-second
-HTTP deadline. The results describe tested request-path and concurrency
-boundaries rather than a universal capacity. Dropped arrivals were not issued and
-are reported separately from HTTP errors. The [capacity experiment plan](docs/experiments/sqlite-capacity-plan.md)
-and [capacity harness README](benchmarks/http/capacity/README.md) describe the
-protocol and telemetry.
-
-## 1. memory consumption, request latency across different languages with REALISTIC tests
-### why? -> I want to see which backend language is the most performant given my usual narrowly scoped needs
- **using sqlite as db
- ** we should probably seed the db's with a few thousand records?
- ** we should run the tests across a few different operations
- ** we should keep hitting the api's with requests until they begin to fallover
- ** we should test common things like json serialization
- ** im not sure if the db will be bottleneck first? if it is perhaps we need to provision postgres or something?
- ** ?? more things im not thinking of?
-    a) golang using net/http and native go sql driver
-        i) net/http
-        ii) echo
-        iii) gin
-        iii) huma
-        iv) fiber
-    b) nodejs
-        i) express
-        ii) koa
-        iii) nestJs
-        iii) hono
-    c) bun
-        i) express
-        ii) koa
-        iii) nestJs
-        iii) hono
-    c) rust
-        i) express
-        ii) koa
-        iii) nestJs
-        iii) hono
-
-## 2. Database comparison
-### why? -> I want to see how well something like sqlite scales? at what point would i need something more powerful?
- ** not exactly sure how to test this?
- ** reads
- ** writes
- ** reads/writes with row locking?
-    a) sqlite
-    b) postgres
-    c) ??
-
-## 3. agentic tool comparisons
-### why? -> does the underlying language of the harness actually make a difference and speed up the model at all?;
-** ask an agent a question or give it a task within a large codebase
-    a) go
-    b) node
-    c) rust
-    d) bash
+- Compare SQLite and Postgres.
+- Add mixed database workloads.
+- Compare agent frameworks.
