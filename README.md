@@ -1,5 +1,33 @@
 # Performance experiments
 
+### what is this?
+This is me sating my curiosity - I was interested in seeing how a bunch of different langs and frameworks compared against eachother.
+
+I was particularly interested in performance - How many requests per second before each api broke? How did the request latencies compare? How much memory and cpu got used during this?
+
+### how i did it
+- I chose a few different languages and frameworks, t
+- I told GPT-6.1-Sol high to write a basic http api in each service. 
+- I chose sqlite as the db and seeded it with test data.
+- I deployed each api to my small home server with a set amount of compute each time
+- I used K6 to generate a mixture of different load and captured the result
+
+### what this tells us
+Firstly, many people will point out that this is ai slop. 
+
+It is kind of. 
+
+And perhaps a good Elixir developer would be able to write a far more performant api...
+
+But this in itself is a great test and tells us a lot - If an average developer or vibecoder were to write these services, this is probably a similar result to what they would get. Performance tuning is irrelevant here and is not the goal of these tests.
+
+These tests give us a rough indication of what these langs can output given a very small single core machine to run on with sqlite.
+
+The results are not indicative of the langs/frameworks performance across all deployment architectures - only this limited case I have set it up with.
+
+The results definitely surprised me and upset me a little as a fan of Go (I was hoping for better Go performance)
+
+
 Real HTTP, JSON, and SQLite experiments running on local Kubernetes.
 
 ## Latest results — SQLite capacity search
