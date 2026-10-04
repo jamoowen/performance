@@ -4,7 +4,7 @@ The first runnable HTTP baseline lives in [benchmarks/http](benchmarks/http/READ
 
 ## HTTP benchmark reports
 
-Start with the [interactive follow-up report index](https://jamoowen.github.io/performance/) and read the [follow-up findings](docs/reports/http/followup-findings.md). See the [independent fairness and metrics audit](docs/reports/http/methodology-review.md) for a review of the methodology. The original [comparison report](https://jamoowen.github.io/performance/reports/http/comparison.html), [CSV](https://jamoowen.github.io/performance/reports/http/comparison.csv), and [historical findings](docs/reports/http/findings.md) remain a separate diagnostics snapshot.
+Start with the [interactive SQLite capacity report](https://jamoowen.github.io/performance/reports/http/sqlite-capacity/comparison.html) and its [findings](docs/reports/http/sqlite-capacity/findings.md). The [interactive follow-up report index](https://jamoowen.github.io/performance/) and [follow-up findings](docs/reports/http/followup-findings.md), [independent fairness and metrics audit](docs/reports/http/methodology-review.md), and original [comparison report](https://jamoowen.github.io/performance/reports/http/comparison.html), [CSV](https://jamoowen.github.io/performance/reports/http/comparison.csv), and [historical findings](docs/reports/http/findings.md) remain separate prior experiments.
 
 Refresh the historical snapshot from the repository root after recording results:
 
@@ -41,13 +41,16 @@ and report source document the methodology and generation workflow.
 
 ## Adaptive SQLite capacity search
 
-The next campaign keeps the same application workload but performs short,
-separate steps and stops after sustained overload. It covers 13 adapters,
-omitting Plug and Rocket. The [capacity experiment plan](docs/experiments/sqlite-capacity-plan.md)
+The [capacity report](https://jamoowen.github.io/performance/reports/http/sqlite-capacity/comparison.html)
+uses 13 adapters, omitting Plug and Rocket. Each adapter has separate 90-second
+steps: 15 seconds settling/transition and 75 stable seconds at 300, 600, 900,
+1200, and 1500 RPS, then 25% higher targets. It runs with one CPU quota, 512 MiB, a
+shared node and accepted Wi-Fi route, fixed 1,024 measured VUs, and a two-second
+HTTP deadline. The results describe tested request-path and concurrency
+boundaries rather than a universal capacity. Dropped arrivals were not issued and
+are reported separately from HTTP errors. The [capacity experiment plan](docs/experiments/sqlite-capacity-plan.md)
 and [capacity harness README](benchmarks/http/capacity/README.md) describe the
-adaptive protocol, pod-level OOM telemetry, and the limits of its shared Wi-Fi,
-one-CPU environment. A public report link will be added after real captures are
-available.
+protocol and telemetry.
 
 ## 1. memory consumption, request latency across different languages with REALISTIC tests
 ### why? -> I want to see which backend language is the most performant given my usual narrowly scoped needs

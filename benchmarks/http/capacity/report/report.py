@@ -94,7 +94,7 @@ SAFE_WARNINGS = {
     "disk_guard",
 }
 SAFE_PHASES = {"transition", "settling", "stable", "drain"}
-SAFE_TEXT = re.compile(r"^[A-Za-z0-9 .,:_+@/=-]{1,160}$")
+SAFE_TEXT = re.compile(r"^[A-Za-z0-9 .,:_+@/=()\-]{1,160}$")
 PRIVATE = re.compile(
     r"(?:\b(?:\d{1,3}\.){3}\d{1,3}\b|/users/|/private/|/tmp/|\\\\|ssh://|\bpod[-_/ ])", re.I
 )
@@ -112,11 +112,12 @@ def _num(value):
 
 
 def _integer(value):
-    return (
-        value
-        if isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= 1_000_000
-        else None
-    )
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
+
+
+def _bounded_integer(value):
+    value = _integer(value)
+    return value if value is not None and value <= 1_000_000 else None
 
 
 def _text(value):
@@ -184,7 +185,7 @@ def _clean_metadata(source):
         if key in source
     }
     for key in ("measuredVus", "maxVus", "warmupVus", "collectorDurationSeconds"):
-        result[key] = _integer(source.get(key))
+        result[key] = _bounded_integer(source.get(key))
     result["pragmas"] = {
         key: _text(value) if isinstance(value, str) else _num(value)
         for key, value in source.get("pragmas", {}).items()
@@ -365,16 +366,61 @@ def _clean_stage(source):
 def _clean_integrity(source):
     source = source if isinstance(source, dict) else {}
     qualifier = source.get("qualifier")
-    status = source.get("status")
-    if status not in SAFE_INTEGRITY_STATUS:
-        status = "unverified" if qualifier in SAFE_INTEGRITY_QUALIFIERS else None
+    before, after = source.get("before"), source.get("after")
+    counts = {
+        key: _integer(source.get(key))
+        for key in ("acknowledged", "failed", "committedUnacknowledged")
+    }
+    has_snapshots = "before" in source or "after" in source
+    if qualifier in SAFE_INTEGRITY_QUALIFIERS:
+        status = "unverified"
+    elif has_snapshots:
+        status = _snapshot_integrity_status(
+            before,
+            after,
+            counts,
+            committed_count_present="committedUnacknowledged" in source,
+        )
+    else:
+        # Older, already-sanitized fixtures can carry a status without snapshots.
+        status = source.get("status") if source.get("status") in SAFE_INTEGRITY_STATUS else None
     return {
         "status": status,
         "qualifier": qualifier if qualifier in SAFE_INTEGRITY_QUALIFIERS else None,
-        "acknowledged": _num(source.get("acknowledged")),
-        "failed": _num(source.get("failed")),
-        "committedUnacknowledged": _num(source.get("committedUnacknowledged")),
+        **counts,
     }
+
+
+def _snapshot_integrity_status(before, after, counts, *, committed_count_present):
+    """Translate the capacity recorder's before/after proof to public status."""
+    if not isinstance(before, dict) or not isinstance(after, dict):
+        return "unverified"
+    fields = ("rows", "totalRevisions", "totalStock")
+    clean_before = {field: _integer(before.get(field)) for field in fields}
+    clean_after = {field: _integer(after.get(field)) for field in fields}
+    # The recorder omits the derived count when its snapshot validation has
+    # already found a mismatch.  A supplied malformed derived count leaves
+    # that proof incomplete; an omitted one is computed below.
+    if any(value is None for value in (*clean_before.values(), *clean_after.values())):
+        return "unverified"
+    if counts["acknowledged"] is None or counts["failed"] is None:
+        return "unverified"
+    if committed_count_present and counts["committedUnacknowledged"] is None:
+        return "unverified"
+    if clean_before["rows"] != 5000 or clean_before["totalRevisions"] != 0:
+        return "mismatch"
+    revisions = clean_after["totalRevisions"]
+    stock_delta = clean_after["totalStock"] - clean_before["totalStock"]
+    excess = revisions - counts["acknowledged"]
+    if (
+        clean_after["rows"] != 5000
+        or stock_delta != revisions
+        or revisions < counts["acknowledged"]
+        or excess > counts["failed"]
+        or (committed_count_present and counts["committedUnacknowledged"] != excess)
+    ):
+        return "mismatch"
+    return "verified"
 
 
 def _clean_run(source, index):

@@ -156,6 +156,7 @@ class CapacityReportTests(unittest.TestCase):
     def test_retains_unverified_final_write_qualifier_without_hiding_capture_data(self):
         source = run()
         source["integrity"] = {
+            "before": {"rows": 5000, "totalRevisions": 0, "totalStock": 499932},
             "qualifier": "unavailable_after_workload_boundary",
             "acknowledged": 300,
             "failed": 4,
@@ -168,6 +169,66 @@ class CapacityReportTests(unittest.TestCase):
         self.assertEqual(integrity["qualifier"], "unavailable_after_workload_boundary")
         self.assertEqual(integrity["committedUnacknowledged"], 2)
         self.assertEqual(len(data["runs"][0]["stages"][0]["windows"]), 1)
+
+    def test_derives_verified_integrity_from_actual_recorder_snapshots(self):
+        source = run()
+        source["integrity"] = {
+            "before": {"rows": 5000, "totalRevisions": 0, "totalStock": 499932},
+            "after": {"rows": 5000, "totalRevisions": 3, "totalStock": 499935},
+            "acknowledged": 3,
+            "failed": 0,
+            "committedUnacknowledged": 0,
+        }
+        data = sanitize({"experiment": "sqlite-capacity-v1", "runs": [source]})
+        self.assertEqual(data["runs"][0]["integrity"]["status"], "verified")
+
+        source["integrity"] = {
+            "before": {"rows": 5000, "totalRevisions": 0, "totalStock": 499932},
+            "after": {"rows": 5000, "totalRevisions": 14987, "totalStock": 514919},
+            "acknowledged": 7433,
+            "failed": 7554,
+            "committedUnacknowledged": 7554,
+        }
+        data = sanitize({"experiment": "sqlite-capacity-v1", "runs": [source]})
+        self.assertEqual(data["runs"][0]["integrity"]["status"], "verified")
+
+    def test_marks_inconsistent_or_incomplete_recorder_proof(self):
+        source = run()
+        source["integrity"] = {
+            "before": {"rows": 5000, "totalRevisions": 0, "totalStock": 499932},
+            "after": {"rows": 4999, "totalRevisions": 3, "totalStock": 499935},
+            "acknowledged": 3,
+            "failed": 0,
+        }
+        data = sanitize({"experiment": "sqlite-capacity-v1", "runs": [source]})
+        self.assertEqual(data["runs"][0]["integrity"]["status"], "mismatch")
+        self.assertIsNone(data["runs"][0]["integrity"]["committedUnacknowledged"])
+
+        source["integrity"]["after"] = {"rows": 5000, "totalRevisions": 4, "totalStock": 499936}
+        source["integrity"]["committedUnacknowledged"] = 0
+        data = sanitize({"experiment": "sqlite-capacity-v1", "runs": [source]})
+        self.assertEqual(data["runs"][0]["integrity"]["status"], "mismatch")
+
+        source["integrity"] = {
+            "before": {"rows": 5000, "totalRevisions": 0, "totalStock": 499932},
+            "acknowledged": 3,
+            "failed": 0,
+            "committedUnacknowledged": 0,
+        }
+        data = sanitize({"experiment": "sqlite-capacity-v1", "runs": [source]})
+        self.assertEqual(data["runs"][0]["integrity"]["status"], "unverified")
+
+    def test_marks_a_malformed_supplied_derived_integrity_count_unverified(self):
+        source = run()
+        source["integrity"] = {
+            "before": {"rows": 5000, "totalRevisions": 0, "totalStock": 499932},
+            "after": {"rows": 5000, "totalRevisions": 3, "totalStock": 499935},
+            "acknowledged": 3,
+            "failed": 0,
+            "committedUnacknowledged": "not-a-count",
+        }
+        data = sanitize({"experiment": "sqlite-capacity-v1", "runs": [source]})
+        self.assertEqual(data["runs"][0]["integrity"]["status"], "unverified")
 
     def test_keeps_unequal_step_gaps_and_only_complete_stages_have_csv_rows(self):
         source = run()
@@ -196,6 +257,22 @@ class CapacityReportTests(unittest.TestCase):
         data = sanitize({"experiment": "sqlite-capacity-v1", "runs": [source]})
         self.assertEqual(data["runs"][0]["metadata"]["driver"], "local_artifact")
         self.assertNotIn("ssh", data["runs"][0]["generator"])
+
+    def test_preserves_actual_parenthesized_runtime_framework_and_driver_metadata(self):
+        source = run()
+        source["metadata"].update(
+            {
+                "driver": "node:sqlite DatabaseSync (release candidate)",
+                "frameworkVersion": "12.1.2 (Express adapter 5.2.1)",
+                "runtimeVersion": "rustc 1.93.0 (254b59607 2026-01-19)",
+            }
+        )
+        metadata = sanitize({"experiment": "sqlite-capacity-v1", "runs": [source]})["runs"][0][
+            "metadata"
+        ]
+        self.assertEqual(metadata["driver"], source["metadata"]["driver"])
+        self.assertEqual(metadata["frameworkVersion"], source["metadata"]["frameworkVersion"])
+        self.assertEqual(metadata["runtimeVersion"], source["metadata"]["runtimeVersion"])
 
     def test_allowlists_fixed_vu_and_collector_metadata_as_safe_integers(self):
         source = run()
